@@ -1,0 +1,8 @@
+{
+  "dependencies": {
+    "confluence-to-github-markdown": "^1.1.2",
+    "jsdom": "^20.0.2",
+    "prettier": "^2.7.1",
+    "supervisor": "^0.12.0"
+  }
+}
