@@ -40,6 +40,7 @@ const copycommands = [];
 const extractImage = node => {
   const parsedImgPath = path.resolve(inputdir);
   const [ file ] = node.src.split(parsedImgPath + path.sep).slice(1);
+  if (!file) return;
   const { base } = path.parse(file);
   const filename = base.replace(/\?.*/, '');
   const filepath = getFilepath(node);
