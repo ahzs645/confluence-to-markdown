@@ -148,62 +148,10 @@ function processDiv(div, document, processedElements, parentPath) {
   return markdown;
 }
 
-function processTable(table, document, processedElements, parentPath) { 
-  const currentTablePath = `${parentPath || "TABLE_ROOT"} > TABLE${table.id ? "#"+table.id : ""}${table.className ? "."+table.className.trim().replace(/\s+/g, ".") : ""}`;
-  try {
-    if (isHistoryTable(table)) {
-      return processHistoryTable(table, document, processedElements, currentTablePath);
-    }
-    if (isLayoutTable(table, document)) {
-      return processLayoutTableContent(table, document, processedElements, currentTablePath);
-    }
-    const allTableRows = [];
-    let maxCols = 0;
-    const htmlRows = Array.from(table.rows);
-    for (const tr of htmlRows) {
-      if (processedElements.has(tr)) continue;
-      const currentRowCells = [];
-      const htmlCells = Array.from(tr.cells);
-      let currentCellIndex = 0;
-      for (const td_th of htmlCells) {
-        const colspan = parseInt(td_th.getAttribute("colspan") || "1", 10);
-        const cellContent = contentProcessor.cleanCellContent(td_th, document, new Set(processedElements), module.exports, `${currentTablePath} > TR > ${(td_th.tagName || "CELL")}`);
-        currentRowCells[currentCellIndex] = cellContent || " ";
-        for (let k = 1; k < colspan; k++) {
-          currentCellIndex++;
-          currentRowCells[currentCellIndex] = " "; 
-        }
-        currentCellIndex++;
-      }
-      if (currentRowCells.length > 0) {
-        allTableRows.push({ type: tr.querySelectorAll("th").length > 0 ? "header" : "data", cells: currentRowCells });
-        maxCols = Math.max(maxCols, currentRowCells.length);
-      }
-    }
-    if (allTableRows.length === 0 || maxCols === 0) {
-        return "";
-    }
-    for (const rowObj of allTableRows) {
-      while (rowObj.cells.length < maxCols) {
-        rowObj.cells.push(" ");
-      }
-    }
-    let markdown = "\n";
-    let headerProcessed = false;
-    for (let i = 0; i < allTableRows.length; i++) {
-      const rowObj = allTableRows[i];
-      if (rowObj.cells.every(c => (c || "").trim() === "")) continue;
-      markdown += "| " + rowObj.cells.join(" | ") + " |\n";
-      if ((rowObj.type === "header" || i === 0) && !headerProcessed && allTableRows.length > 1) {
-        markdown += "|" + Array(maxCols).fill("---").join("|") + "|\n";
-        headerProcessed = true;
-      }
-    }
-    return markdown.trim() ? markdown + "\n\n" : "";
-  } catch (err) {
-    console.error(`Error processing table (Path: ${currentTablePath}):`, err);
-    return "";
-  }
+function isComplexCell(cell) {
+  return (
+    cell.querySelector('h1, h2, h3, ul, ol, img, .panel, .confluence-information-macro')
+  );
 }
 
 function processLayoutTableContent(table, document, processedElements, parentPath) {
@@ -298,6 +246,324 @@ function processHistoryTable(table, document, processedElements, parentPath) {
     console.error(`Error processing history table (Path: ${currentPath}):`, err);
     return "";
   }
+}
+
+/**
+ * Check if a table cell contains complex content that can't be properly rendered in a Markdown table
+ * @param {Element} cell The cell to check
+ * @returns {boolean} True if complex cell
+ */
+function isComplexCell(cell) {
+  if (!cell) return false;
+  
+  // Check for headings, images, lists, tables, panels, etc.
+  if (cell.querySelector('h1, h2, h3, h4, h5, h6, img, ul, ol, table, .panel, .confluence-information-macro')) {
+    return true;
+  }
+  
+  // Check for multiple paragraphs
+  const paragraphs = cell.querySelectorAll('p');
+  if (paragraphs.length > 1) {
+    return true;
+  }
+  
+  // Check for content with multiple line breaks that would need to be preserved
+  const content = cell.textContent.trim();
+  if (content.includes('\n\n')) {
+    return true;
+  }
+  
+  return false;
+}
+
+/**
+ * Check if a table contains complex content that can't be properly rendered in a Markdown table
+ * @param {Element} table The table to check
+ * @returns {boolean} True if complex table
+ */
+function isComplexTable(table) {
+  if (!table) return false;
+  
+  // Check each cell
+  const cells = table.querySelectorAll('td, th');
+  for (const cell of cells) {
+    if (isComplexCell(cell)) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+/**
+ * Process a table element and convert it to Markdown
+ * @param {Element} table Table element
+ * @param {Document} document JSDOM document
+ * @param {Set} processedElements Already processed elements
+ * @param {string} parentPath For debugging: path of parent elements
+ * @returns {string} Markdown content
+ */
+function processTable(table, document, processedElements, parentPath) { 
+  const currentTablePath = `${parentPath || "TABLE_ROOT"} > TABLE${table.id ? "#"+table.id : ""}${table.className ? "."+table.className.trim().replace(/\s+/g, ".") : ""}`;
+  try {
+    // Special table types
+    if (isHistoryTable(table)) {
+      return processHistoryTable(table, document, processedElements, currentTablePath);
+    }
+    if (isLayoutTable(table, document)) {
+      return processLayoutTableContent(table, document, processedElements, currentTablePath);
+    }
+    
+    // Check if this is a complex table
+    if (isComplexTable(table)) {
+      // Process complex table as markdown sections to preserve content
+      return processTableAsSections(table, document, processedElements, currentTablePath);
+    }
+    
+    // Process regular table that can be converted to Markdown format
+    const allTableRows = [];
+    let maxCols = 0;
+    const htmlRows = Array.from(table.rows);
+    
+    for (const tr of htmlRows) {
+      if (processedElements.has(tr)) continue;
+      processedElements.add(tr);
+      
+      const currentRowCells = [];
+      const htmlCells = Array.from(tr.cells);
+      let currentCellIndex = 0;
+      
+      for (const td_th of htmlCells) {
+        processedElements.add(td_th);
+        const colspan = parseInt(td_th.getAttribute("colspan") || "1", 10);
+        
+        // Use processSimpleCellContent for all cells in a regular table
+        const cellContent = processSimpleCellContent(td_th, document, new Set(processedElements), module.exports, `${currentTablePath} > TR > ${(td_th.tagName || "CELL")}`);
+        currentRowCells[currentCellIndex] = cellContent || " ";
+        
+        for (let k = 1; k < colspan; k++) {
+          currentCellIndex++;
+          currentRowCells[currentCellIndex] = " "; 
+        }
+        currentCellIndex++;
+      }
+      
+      if (currentRowCells.length > 0) {
+        allTableRows.push({ 
+          type: tr.querySelectorAll("th").length > 0 ? "header" : "data", 
+          cells: currentRowCells 
+        });
+        maxCols = Math.max(maxCols, currentRowCells.length);
+      }
+    }
+    
+    if (allTableRows.length === 0 || maxCols === 0) {
+        return "";
+    }
+    
+    // Ensure all rows have the same number of columns
+    for (const rowObj of allTableRows) {
+      while (rowObj.cells.length < maxCols) {
+        rowObj.cells.push(" ");
+      }
+    }
+    
+    // Generate the Markdown table
+    let markdown = "\n";
+    let headerProcessed = false;
+    
+    for (let i = 0; i < allTableRows.length; i++) {
+      const rowObj = allTableRows[i];
+      if (rowObj.cells.every(c => (c || "").trim() === "")) continue;
+      
+      markdown += "| " + rowObj.cells.join(" | ") + " |\n";
+      
+      // Add header separator after the first row or actual header row
+      if ((rowObj.type === "header" || i === 0) && !headerProcessed && allTableRows.length > 1) {
+        markdown += "|" + Array(maxCols).fill("---").join("|") + "|\n";
+        headerProcessed = true;
+      }
+    }
+    
+    return markdown.trim() ? markdown + "\n\n" : "";
+  } catch (err) {
+    console.error(`Error processing table (Path: ${currentTablePath}):`, err);
+    return "";
+  }
+}
+
+/**
+ * Process a complex table as Markdown sections
+ * @param {Element} table The complex table to process
+ * @param {Document} document JSDOM document
+ * @param {Set} processedElements Set of already processed elements
+ * @param {string} parentPath Parent path for debugging
+ * @returns {string} Markdown with sections
+ */
+function processTableAsSections(table, document, processedElements, parentPath) {
+  const currentPath = `${parentPath || "TABLE_AS_SECTIONS_ROOT"} > TABLE_AS_SECTIONS${table.id ? "#"+table.id : ""}${table.className ? "."+table.className.trim().replace(/\s+/g, ".") : ""}`;
+  let markdown = "\n";
+  
+  try {
+    const rows = Array.from(table.rows);
+    
+    for (const row of rows) {
+      if (processedElements.has(row)) continue;
+      processedElements.add(row);
+      
+      const cells = Array.from(row.cells);
+      if (cells.length === 0) continue;
+      
+      // Process the row as a section
+      // First cell becomes the section heading
+      const firstCell = cells[0];
+      
+      // Process the first cell for heading
+      let sectionTitle = "";
+      for (const child of firstCell.childNodes) {
+        sectionTitle += contentProcessor.processElementContent(child, document, new Set(processedElements), module.exports, `${currentPath} > SECTION_TITLE`);
+      }
+      
+      // Clean up the title
+      sectionTitle = sectionTitle.trim();
+      
+      // If the cell content starts with a heading marker, use that
+      // Otherwise, add a heading level
+      if (!sectionTitle.startsWith("#")) {
+        sectionTitle = `### ${sectionTitle}`;
+      }
+      
+      // Add the section title if not empty
+      if (sectionTitle && sectionTitle !== "###") {
+        markdown += `${sectionTitle}\n\n`;
+      }
+      
+      // Process additional cells in the row to get their full content
+      for (let i = 1; i < cells.length; i++) {
+        const cell = cells[i];
+        if (!cell || !cell.childNodes || cell.childNodes.length === 0) continue;
+        
+        // Process cell content preserving all formatting
+        let cellContent = "";
+        for (const child of cell.childNodes) {
+          cellContent += contentProcessor.processElementContent(child, document, new Set(processedElements), module.exports, `${currentPath} > SECTION_CONTENT`);
+        }
+        
+        if (cellContent.trim()) {
+          markdown += cellContent.trim() + "\n\n";
+        }
+      }
+    }
+    
+    return markdown;
+  } catch (err) {
+    console.error(`Error processing table as sections (Path: ${currentPath}):`, err);
+    return "";
+  }
+}
+
+/**
+ * Process simple cell content for regular Markdown tables
+ * @param {Element} cell The cell to process
+ * @param {Document} document JSDOM document
+ * @param {Set} processedElements Set of already processed elements
+ * @param {Object} processors Module containing processor functions
+ * @param {string} parentPath Parent path for debugging
+ * @returns {string} Simplified cell content for Markdown tables
+ */
+function processSimpleCellContent(cell, document, processedElements, processors, parentPath) {
+  if (!cell) return "";
+  
+  // Create a new Set for cell content to avoid interference with parent table structure
+  const cellProcessedElements = new Set(processedElements); 
+  let content = "";
+  
+  // Extract text content for simpler cells
+  for (const child of cell.childNodes) {
+    if (child.nodeType === 3) { // Text node
+      content += child.textContent;
+    } else if (child.nodeType === 1) { // Element node
+      if (child.tagName === 'BR') {
+        content += " ";
+      } else if (child.tagName === 'A') {
+        const href = child.getAttribute('href') || "";
+        const text = child.textContent.trim();
+        content += `[${text}](${href})`;
+      } else if (child.tagName === 'STRONG' || child.tagName === 'B') {
+        content += `**${child.textContent.trim()}**`;
+      } else if (child.tagName === 'EM' || child.tagName === 'I') {
+        content += `*${child.textContent.trim()}*`;
+      } else if (child.tagName === 'CODE') {
+        content += `\`${child.textContent.trim()}\``;
+      } else {
+        content += child.textContent;
+      }
+    }
+  }
+  
+  // Clean up the content for Markdown tables
+  content = content.trim()
+    .replace(/\s+/g, " ")     // Collapse whitespace
+    .replace(/\|/g, "\\|")    // Escape pipe characters
+    .replace(/\n/g, " ");     // Remove newlines
+  
+  return content;
+}
+
+/**
+ * Create a simplified text representation of complex cell content
+ * @param {Element} cell The cell with complex content
+ * @returns {string} Simplified text representation
+ */
+function simplifyComplexCellContent(cell) {
+  // Handle headings - extract text and preserve as a strong text
+  const headings = cell.querySelectorAll('h1, h2, h3, h4, h5, h6');
+  if (headings.length > 0) {
+    return `**${headings[0].textContent.trim()}**`;
+  }
+  
+  // Handle images - indicate [image] with alt text if available
+  const images = cell.querySelectorAll('img');
+  if (images.length > 0) {
+    const alt = images[0].getAttribute('alt') || 'image';
+    return `[${alt}]`;
+  }
+  
+  // Handle lists - create a simplified list representation
+  const lists = cell.querySelectorAll('ul, ol');
+  if (lists.length > 0) {
+    const list = lists[0];
+    const items = list.querySelectorAll('li');
+    if (items.length <= 2) {
+      // For short lists, include the items
+      return Array.from(items)
+        .map(item => `• ${item.textContent.trim()}`)
+        .join(' ');
+    } else {
+      // For longer lists, just indicate the number of items
+      return `[List with ${items.length} items]`;
+    }
+  }
+  
+  // Handle nested tables - just indicate [table]
+  const tables = cell.querySelectorAll('table');
+  if (tables.length > 0) {
+    return '[Nested table]';
+  }
+  
+  // Handle panels/macros
+  const panels = cell.querySelectorAll('.panel, .confluence-information-macro');
+  if (panels.length > 0) {
+    return '[Panel content]';
+  }
+  
+  // Default: extract text content, collapse whitespace, and limit length
+  let text = cell.textContent.trim().replace(/\s+/g, ' ');
+  if (text.length > 50) {
+    text = text.substring(0, 47) + '...';
+  }
+  
+  return text;
 }
 
 function processHeader(header, document, processedElements, parentPath) {
@@ -400,6 +666,10 @@ module.exports = {
   processLayout,
   processDiv,
   processTable,
+  processTableAsSections,
+  processSimpleCellContent,
+  isComplexTable,
+  isComplexCell,
   processLayoutTableContent,
   processHistoryTable,
   processHeader,

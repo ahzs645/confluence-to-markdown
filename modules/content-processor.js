@@ -8,13 +8,13 @@
 const path = require("path");
 
 /**
- * Process an element and its content
- * @param {Element} element Element to process
+ * Clean and format cell content for Markdown tables, handling complex content
+ * @param {Element} cell The table cell
  * @param {Document} document JSDOM document
- * @param {Set} processedElements Already processed elements
- * @param {Object} processors Module containing processor functions (elementProcessors)
- * @param {string} parentPath For debugging: path of parent elements
- * @returns {string} Markdown content
+ * @param {Set} processedElements Set of already processed elements
+ * @param {Object} processors Module containing processor functions
+ * @param {string} parentPath Parent path for debugging
+ * @returns {string} Cleaned cell content
  */
 function processElementContent(element, document, processedElements, processors, parentPath = "ROOT") {
   if (!element || !element.nodeType) return "";
@@ -206,19 +206,111 @@ function processElementContent(element, document, processedElements, processors,
 
 function cleanCellContent(cell, document, processedElements, processors, parentPath) {
   if (!cell) return "";
-  // Create a new Set for cell content to avoid interference with parent table structure processing if complex elements are inside cells.
-  // However, it should inherit from the main processedElements to avoid re-processing globally processed items.
+  
+  // Check if the cell contains complex content
+  if (isComplexTableCell(cell)) {
+    // For complex cells, return simplified representation
+    return simplifyComplexCell(cell);
+  }
+  
+  // For simple cells, process content with better formatting
   const cellProcessedElements = new Set(processedElements); 
   let content = "";
+  
   for (const child of cell.childNodes) {
-    // Pass the cellProcessedElements set, not the global one directly for this recursion.
     content += processElementContent(child, document, cellProcessedElements, processors, `${parentPath} > CELL_CHILD`);
   }
-  content = content.trim();
-  content = content.replace(/\n/g, "<br />");
-  content = content.replace(/\s+/g, " ");
-  content = content.replace(/\|/g, "\\\\|");
+  
+  // Clean up the content for Markdown tables
+  content = content.trim()
+    .replace(/\n/g, " ")      // Replace newlines with spaces
+    .replace(/\s+/g, " ")     // Collapse whitespace
+    .replace(/\|/g, "\\|");   // Escape pipe characters
+  
   return content;
+}
+
+/**
+ * Check if a cell contains complex content that can't be properly rendered in a Markdown table
+ * @param {Element} cell The cell to check
+ * @returns {boolean} True if complex cell
+ */
+function isComplexTableCell(cell) {
+  if (!cell) return false;
+  
+  // Check for headings, images, lists, tables, panels, etc.
+  if (cell.querySelector('h1, h2, h3, h4, h5, h6, img, ul, ol, table, .panel, .confluence-information-macro')) {
+    return true;
+  }
+  
+  // Check for multiple paragraphs
+  const paragraphs = cell.querySelectorAll('p');
+  if (paragraphs.length > 1) {
+    return true;
+  }
+  
+  // Check for content with multiple line breaks that would need to be preserved
+  if (cell.innerHTML && cell.innerHTML.includes('<br') && cell.innerHTML.split('<br').length > 2) {
+    return true;
+  }
+  
+  return false;
+}
+
+/**
+ * Create a simplified representation of complex cell content
+ * @param {Element} cell The complex cell
+ * @returns {string} Simplified representation
+ */
+function simplifyComplexCell(cell) {
+  // Handle headings - extract text and preserve as a strong text
+  const headings = cell.querySelectorAll('h1, h2, h3, h4, h5, h6');
+  if (headings.length > 0) {
+    return `**${headings[0].textContent.trim()}**`;
+  }
+  
+  // Handle images - indicate [image] with alt text if available
+  const images = cell.querySelectorAll('img');
+  if (images.length > 0) {
+    const alt = images[0].getAttribute('alt') || 'image';
+    return `[${alt}]`;
+  }
+  
+  // Handle lists - create a simplified list representation
+  const lists = cell.querySelectorAll('ul, ol');
+  if (lists.length > 0) {
+    const list = lists[0];
+    const items = list.querySelectorAll('li');
+    if (items.length <= 2) {
+      // For short lists, include the items
+      return Array.from(items)
+        .map(item => `• ${item.textContent.trim()}`)
+        .join(' ');
+    } else {
+      // For longer lists, just indicate the number of items
+      return `[List with ${items.length} items]`;
+    }
+  }
+  
+  // Handle nested tables - just indicate [table]
+  const tables = cell.querySelectorAll('table');
+  if (tables.length > 0) {
+    return '[Nested table]';
+  }
+  
+  // Handle panels/macros
+  const panels = cell.querySelectorAll('.panel, .confluence-information-macro');
+  if (panels.length > 0) {
+    return '[Panel content]';
+  }
+  
+  // Default: extract text content, collapse whitespace, and limit length
+  let text = cell.textContent.trim().replace(/\s+/g, ' ');
+  if (text.length > 50) {
+    text = text.substring(0, 47) + '...';
+  }
+  
+  return text;
 }
 
 function shouldBeIgnored(element, currentPath, parentPath) {
@@ -251,6 +343,9 @@ function shouldBeIgnored(element, currentPath, parentPath) {
 }
 
 module.exports = {
+  cleanCellContent,
+  isComplexTableCell,
+  simplifyComplexCell,
   processElementContent,
   cleanCellContent,
   shouldBeIgnored
