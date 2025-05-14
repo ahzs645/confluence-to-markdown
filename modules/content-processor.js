@@ -63,13 +63,10 @@ function processElementContent(element, document, processedElements, processors,
         }
         break;
       case "H1": case "H2": case "H3": case "H4": case "H5": case "H6":
-        console.log(`processElementContent [${currentPath}]: Processing ${tagName}.`);
-        const level = parseInt(tagName.substring(1), 10);
-        let headingText = "";
-        for (const child of element.childNodes) {
-          headingText += processElementContent(child, document, processedElements, processors, currentPath);
-        }
-        markdown += `${ "#".repeat(level)} ${headingText.trim()}\n\n`;
+        // Direct the heading processing to the specialized header processor
+        // This avoids double processing that leads to "# # Heading" patterns
+        console.log(`processElementContent [${currentPath}]: Calling processHeader for ${tagName}.`);
+        markdown += processors.processHeader(element, document, processedElements, currentPath);
         break;
       case "UL":
         console.log(`processElementContent [${currentPath}]: Processing UL.`);

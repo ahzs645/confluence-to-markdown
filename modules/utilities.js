@@ -5,15 +5,66 @@
  */
 
 /**
- * Clean up and format markdown content
- * @param {string} markdown Markdown content
- * @returns {string} Cleaned markdown
+ * Enhanced cleanupMarkdown function with specific patterns for Confluence document structure
+ * @param {string} markdown Markdown content to clean up
+ * @returns {string} Cleaned markdown content
  */
 function cleanupMarkdown(markdown) {
   if (!markdown) return '';
   
   try {
     let result = markdown;
+    
+    // FIRST PASS: FIX SPECIFIC PATTERNS FOR QUESTION HEADINGS
+    // =====================================================
+    
+    // Most important pattern: Fix "## - ### Question X.Y" format
+    result = result.replace(/^## - ### /gm, '- ### ');
+    
+    // Also fix "# - ### Question X.Y" format
+    result = result.replace(/^# - ### /gm, '- ### ');
+    
+    // Fix any heading with dash prefix that should be a list item
+    result = result.replace(/^#{1,6} - /gm, '- ');
+    
+    // SECOND PASS: FIX HEADING PATTERNS
+    // ===============================
+    
+    // Use multiple iterations to ensure nested patterns are handled
+    for (let i = 0; i < 3; i++) {
+      // Fix "# # Heading" pattern (double hashtags with space between)
+      result = result.replace(/^# # ([^\n]+)$/gm, '## $1');
+      
+      // Fix "# ## Heading" pattern 
+      result = result.replace(/^# ## ([^\n]+)$/gm, '## $1');
+      
+      // Fix "## # Heading" pattern
+      result = result.replace(/^## # ([^\n]+)$/gm, '## $1');
+      
+      // Normalize any other combinations of hashtags
+      result = result.replace(/^(#+)\s+(#+)\s+/gm, '$1 ');
+    }
+    
+    // THIRD PASS: OTHER SPECIALIZED CLEANUP
+    // =====================================
+    
+    // Remove heading IDs from Confluence
+    result = result.replace(/\s+{#.*?}$/gm, '');
+    
+    // Fix "# Title" to "## Title" for main sections (A-Z first letter)
+    result = result.replace(/^# ([A-Z][^#\n]+?)$/gm, '## $1');
+    
+    // Fix multi-bullet list items that got broken during conversion
+    result = result.replace(/^- - /gm, '  - ');
+    
+    // Clean up unnecessary markers in lists
+    result = result.replace(/^- # /gm, '- ');
+    
+    // Normalize all other heading levels (H3+)
+    result = result.replace(/^(#{3,})\s+/gm, '### ');
+    
+    // FOURTH PASS: STANDARD CLEANUP
+    // ===========================
     
     // Fix line endings
     result = result.replace(/\r\n/g, '\n');
@@ -86,9 +137,58 @@ function cleanupMarkdown(markdown) {
     // Fix list item formatting
     result = result.replace(/^(\s*[-*+])\s*$/gm, '$1 ');
     
+    // FINAL CLEANUP PASS - catch any remaining issues
+    // =============================================
+    
+    // Final check for any remaining patterns that might have been missed
+    result = result.replace(/^# # /gm, '## ');
+    result = result.replace(/^## - ### /gm, '- ### ');
+    
     return result;
   } catch (err) {
     console.error('Error cleaning up markdown:', err);
+    return markdown;
+  }
+}
+
+function specializedMarkdownCleanup(markdown) {
+  if (!markdown) return '';
+  
+  try {
+    let result = markdown;
+    
+    // Apply fixes in a specific order for optimal results
+    const patterns = [
+      // 1. Remove heading IDs from Confluence
+      [/\s+{#.*?}$/gm, ''],
+      
+      // 2. Fix duplicate hashtags in headings (e.g. "# # Heading")
+      [/^(#+)\s+#+\s+/gm, '$1 '],
+      
+      // 3. Convert main section headings to level 2
+      [/^# ([A-Z][^#\n]+?)$/gm, '## $1'],
+      
+      // 4. Fix "# - ### Question X.Y" patterns to list items with headings
+      [/^# - ### (.*?)$/gm, '- ### $1'],
+      
+      // 5. Fix multi-bullet list items that got broken during conversion
+      [/^- - /gm, '  - '],
+      
+      // 6. Clean up unnecessary markers in lists
+      [/^- # /gm, '- '],
+      
+      // 7. Normalize all other heading levels (H3+)
+      [/^(#{3,})\s+/gm, '### ']
+    ];
+    
+    // Apply each pattern in sequence
+    for (const [pattern, replacement] of patterns) {
+      result = result.replace(pattern, replacement);
+    }
+    
+    return result;
+  } catch (err) {
+    console.error('Error in specializedMarkdownCleanup:', err);
     return markdown;
   }
 }

@@ -121,19 +121,24 @@ async function postProcessMarkdownFiles(outputDir) {
         if (entry.isDirectory()) {
           await processDir(fullPath);
         } else if (entry.name.endsWith(".md")) {
-          // Read file
-          let content = await fs.readFile(fullPath, "utf8");
-          
-          // Apply post-processing fixes
-          content = utilities.cleanupMarkdown(content);
-          
-          // Fix broken tables and improve formatting
-          content = utilities.fixBrokenTables(content);
-          
-          // Write back to file
-          await fs.writeFile(fullPath, content, "utf8");
-          
-          console.log(`Post-processed: ${fullPath}`);
+          try {
+            // Read file
+            let content = await fs.readFile(fullPath, "utf8");
+            
+            // Apply standard cleanup - now includes the specialized cleanup logic
+            content = utilities.cleanupMarkdown(content);
+            
+            // Fix broken tables and improve formatting
+            content = utilities.fixBrokenTables(content);
+            
+            // Write back to file
+            await fs.writeFile(fullPath, content, "utf8");
+            
+            console.log(`Post-processed: ${fullPath}`);
+          } catch (err) {
+            console.error(`Error processing file ${fullPath}:`, err);
+            // Continue with other files instead of failing the entire process
+          }
         }
       }
     };

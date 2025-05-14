@@ -314,9 +314,11 @@ function processTable(table, document, processedElements, parentPath) {
       return processLayoutTableContent(table, document, processedElements, currentTablePath);
     }
     
-    // Check if this is a complex table
-    if (isComplexTable(table)) {
-      // Process complex table as markdown sections to preserve content
+    // Check if this is a complex table that should be rendered as sections
+    const isComplex = isComplexTable(table);
+    
+    // For complex tables, process as sections to preserve content
+    if (isComplex) {
       return processTableAsSections(table, document, processedElements, currentTablePath);
     }
     
@@ -393,7 +395,7 @@ function processTable(table, document, processedElements, parentPath) {
 }
 
 /**
- * Process a complex table as Markdown sections
+ * Process a complex table as Markdown sections with improved formatting
  * @param {Element} table The complex table to process
  * @param {Document} document JSDOM document
  * @param {Set} processedElements Set of already processed elements
@@ -424,17 +426,19 @@ function processTableAsSections(table, document, processedElements, parentPath) 
         sectionTitle += contentProcessor.processElementContent(child, document, new Set(processedElements), module.exports, `${currentPath} > SECTION_TITLE`);
       }
       
-      // Clean up the title
+      // Clean up the title - normalize heading format
       sectionTitle = sectionTitle.trim();
       
-      // If the cell content starts with a heading marker, use that
-      // Otherwise, add a heading level
-      if (!sectionTitle.startsWith("#")) {
-        sectionTitle = `### ${sectionTitle}`;
+      // Fix duplicated # characters that might appear in headings
+      sectionTitle = sectionTitle.replace(/^#+\s*#+\s+/, '## ');
+      sectionTitle = sectionTitle.replace(/^#+\s+/, '## '); // Standardize to ## heading level
+      
+      if (!sectionTitle.startsWith('#')) {
+        sectionTitle = `## ${sectionTitle}`;
       }
       
       // Add the section title if not empty
-      if (sectionTitle && sectionTitle !== "###") {
+      if (sectionTitle && sectionTitle !== "##") {
         markdown += `${sectionTitle}\n\n`;
       }
       
@@ -449,6 +453,9 @@ function processTableAsSections(table, document, processedElements, parentPath) 
           cellContent += contentProcessor.processElementContent(child, document, new Set(processedElements), module.exports, `${currentPath} > SECTION_CONTENT`);
         }
         
+        // Cleanup the cell content
+        cellContent = cleanupSectionContent(cellContent);
+        
         if (cellContent.trim()) {
           markdown += cellContent.trim() + "\n\n";
         }
@@ -460,6 +467,39 @@ function processTableAsSections(table, document, processedElements, parentPath) 
     console.error(`Error processing table as sections (Path: ${currentPath}):`, err);
     return "";
   }
+}
+
+/**
+ * Clean up section content to fix common formatting issues
+ * @param {string} content The markdown content to clean up
+ * @returns {string} Cleaned up content
+ */
+function cleanupSectionContent(content) {
+  let cleaned = content;
+  
+  // Fix nested list indentation
+  cleaned = cleaned.replace(/^(\s*[-*])\s+[-*]\s+/gm, '$1   * ');
+  
+  // Fix bullet points with headings
+  cleaned = cleaned.replace(/^(\s*[-*])\s+(#{1,6})\s+/gm, '$1 **');
+  cleaned = cleaned.replace(/^(\s*[-*]\s+)#{1,6}(.+?)$/gm, '$1**$2**');
+  
+  // Fix headings appearing directly after bullet points
+  cleaned = cleaned.replace(/^(\s*[-*].+\n)(#+\s+)/gm, '$1\n$2');
+  
+  // Remove extra # characters
+  cleaned = cleaned.replace(/^#+\s*#+\s+/gm, '### ');
+  
+  // Fix duplicated bullet points
+  cleaned = cleaned.replace(/^(\s*)[-*]\s+[-*]\s+/gm, '$1- ');
+  
+  // Fix spacing in lists
+  cleaned = cleaned.replace(/^-\s+/gm, '- ');
+  
+  // Fix headings inside bullets
+  cleaned = cleaned.replace(/^(\s*[-*]\s+)(?=.*? \*\*)/gm, '$1');
+  
+  return cleaned;
 }
 
 /**
@@ -667,6 +707,7 @@ module.exports = {
   processDiv,
   processTable,
   processTableAsSections,
+  cleanupSectionContent,
   processSimpleCellContent,
   isComplexTable,
   isComplexCell,
