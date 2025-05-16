@@ -144,6 +144,10 @@ function cleanupMarkdown(markdown) {
     result = result.replace(/^# # /gm, '## ');
     result = result.replace(/^## - ### /gm, '- ### ');
     
+    // Fix extra asterisks that sometimes appear in document notices
+    result = result.replace(/\*\s*$/, ''); // Remove trailing asterisks at the end of lines
+    result = result.replace(/> - \*\*.*?\*\* \*/g, '> - **$1**'); // Fix asterisks at the end of notices
+    
     return result;
   } catch (err) {
     console.error('Error cleaning up markdown:', err);
@@ -371,10 +375,23 @@ function escapeYaml(text) {
   if (!text) return '';
   
   try {
-    return text
+    // First remove ALL existing escape sequences for backslashes
+    let cleaned = text;
+    
+    // Replace escaped square brackets with unescaped ones
+    cleaned = cleaned.replace(/\\\[/g, '[');
+    cleaned = cleaned.replace(/\\\]/g, ']');
+    
+    // Replace other common escaped characters
+    cleaned = cleaned.replace(/\\([&%{}])/g, '$1');
+    
+    // Now escape only what needs to be escaped for YAML
+    return cleaned
       .replace(/"/g, '\\"') // Escape double quotes
       .replace(/\n/g, ' ') // Replace newlines with spaces
-      .replace(/[:\[\]{}|>&#@`%]/g, match => `\\${match}`); // Escape YAML special chars
+      .replace(/([:|>])/g, match => `\\${match}`); // Escape only truly problematic YAML chars
+    
+    // Note: We're not escaping square brackets and other chars that don't actually need escaping
   } catch (err) {
     console.error('Error escaping YAML:', err);
     return text;

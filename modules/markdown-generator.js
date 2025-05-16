@@ -74,7 +74,22 @@ async function generateMarkdown(document, attachmentOption = "visible", mdFilePa
       frontmatter += `breadcrumbs:\n`;
       for (const crumb of breadcrumbs) {
         frontmatter += `  - title: "${utilities.escapeYaml(crumb.text)}"\n`;
-        frontmatter += `    url: "${utilities.escapeYaml(crumb.href)}"\n`;
+
+        // Clean up the URL for the YAML
+        let href = crumb.href;
+
+        // Strip any URI parameters
+        href = href.split('?')[0];
+
+        // Extract just the filename
+        const filename = path.basename(href);
+
+        // For internal links, use just the filename
+        if (href !== '#' && !href.startsWith('http')) {
+          href = `./${filename}`;
+        }
+
+        frontmatter += `    url: "${utilities.escapeYaml(href)}"\n`;
       }
     }
     
@@ -86,7 +101,23 @@ async function generateMarkdown(document, attachmentOption = "visible", mdFilePa
     // Add visible breadcrumbs navigation
     if (breadcrumbs && breadcrumbs.length > 0) {
       markdown += '> ';
-      markdown += breadcrumbs.map(crumb => `[${crumb.text}](${crumb.href})`).join(' > ');
+      markdown += breadcrumbs.map(crumb => {
+        // Make sure the href is relative and points to a valid location
+        let href = crumb.href;
+
+        // Strip any URI parameters from the end of the href
+        href = href.split('?')[0];
+
+        // Extract just the filename without directory structure
+        const filename = path.basename(href);
+
+        // For internal links within the site, just use the filename without path
+        if (href !== '#' && !href.startsWith('http')) {
+          href = `./${filename}`;
+        }
+
+        return `[${crumb.text}](${href})`;
+      }).join(' > ');
       markdown += '\n\n';
     }
     
@@ -154,10 +185,20 @@ async function generateMarkdown(document, attachmentOption = "visible", mdFilePa
         console.log(`[REGRESSION_DEBUG] markdown-generator.js: Found ${allAttachments.size} attachments.`);
         if (attachmentOption === "visible") {
           markdown += "\n\n## Attachments\n\n";
-          const bulletImageRelPath = path.normalize(path.relative(path.dirname(mdFilePath), path.join(rootOutputDir, "images", "bullet_blue.gif"))).replace(/\\/g, "/");
+          
+          // bullet image path
+          const bulletImageRelPath = "images/bullet_blue.gif";
+          
           for (const attachment of allAttachments.values()) {
             const filename = attachment.filename || "unknown.file";
-            const attachmentRelPath = `./${attachment.href}`.replace(/\\/g, "/");
+            
+            // Ensure the attachment path is properly relative
+            let attachmentRelPath = attachment.href;
+            if (!attachmentRelPath.startsWith('./') && !attachmentRelPath.startsWith('../')) {
+              attachmentRelPath = `./${attachmentRelPath}`;
+            }
+            
+            attachmentRelPath = attachmentRelPath.replace(/\\/g, "/");
             markdown += `![](${bulletImageRelPath}) [${filename}](${attachmentRelPath})\n`;
           }
         } else if (attachmentOption === "xml") {

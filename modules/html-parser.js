@@ -461,15 +461,32 @@ function extractImages(document) {
  */
 function extractBreadcrumbs(document) {
   const breadcrumbs = [];
-  const breadcrumbItems = document.querySelectorAll('#breadcrumbs li');
+  const breadcrumbItems = document.querySelectorAll('#breadcrumbs li, .breadcrumb-section ol li');
   
   if (breadcrumbItems && breadcrumbItems.length > 0) {
     for (const item of breadcrumbItems) {
       const link = item.querySelector('a');
       if (link) {
+        let href = link.getAttribute('href') || '#';
+        
+        // Convert to relative path if it's not already
+        if (href.startsWith('/')) {
+          href = `.${href}`;
+        } else if (href.includes('://')) {
+          // Keep external URLs as is
+        } else if (!href.startsWith('./') && !href.startsWith('../') && href !== '#') {
+          href = `./${href}`;
+        }
+        
         breadcrumbs.push({
           text: link.textContent.trim(),
-          href: link.getAttribute('href')
+          href: href
+        });
+      } else if (item.textContent.trim()) {
+        // For items without links (current page often doesn't have a link)
+        breadcrumbs.push({
+          text: item.textContent.trim(),
+          href: '#'
         });
       }
     }
