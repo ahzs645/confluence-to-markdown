@@ -194,7 +194,44 @@ function specializedMarkdownCleanup(markdown) {
 }
 
 /**
- * Fix table structure issues
+ * Clean up tables with excessive delimiter rows that occur in some conversions
+ * @param {string} markdown Markdown content
+ * @returns {string} Cleaned markdown
+ */
+function cleanupExcessiveDelimiters(markdown) {
+  if (!markdown) return '';
+  
+  // Fix tables with excessive delimiter rows - this specific pattern appears in your example
+  const excessiveDelimitersPattern = /(\| --- \| --- \| --- \| --- \| --- \| --- \| --- \| --- \| --- \| --- \|(?:\s*?\| --- \|)+)/g;
+  markdown = markdown.replace(excessiveDelimitersPattern, '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |');
+  
+  // Handle tables with many duplicate rows of delimiters
+  const manyDelimitersPattern = /(\| (?:---|:?---:?|---:) \|(?:(?: (?:---|:?---:?|---:) \|)+)\n+)(?:\| (?:---|:?---:?|---:) \|(?:(?: (?:---|:?---:?|---:) \|)+)\n+)+/g;
+  markdown = markdown.replace(manyDelimitersPattern, '$1');
+  
+  return markdown;
+}
+
+/**
+ * Split a table row into cells, properly handling escaped pipes
+ * @param {string} row Table row
+ * @returns {string[]} Array of cell contents
+ */
+function splitTableRow(row) {
+  if (!row) return [];
+  
+  // Remove the first and last pipe characters
+  const content = row.substring(1, row.length - 1);
+  
+  // Split by unescaped pipes
+  // This regex is simplistic but handles most cases
+  const cells = content.split(/(?<!\\\|)\|/);
+  
+  return cells;
+}
+
+/**
+ * Fix table structure issues with enhanced handling for complex tables
  * @param {string} markdown Markdown content
  * @returns {string} Fixed markdown
  */
@@ -202,6 +239,9 @@ function fixBrokenTables(markdown) {
   if (!markdown) return '';
   
   try {
+    // First, clean up tables with excessive delimiter rows
+    markdown = cleanupExcessiveDelimiters(markdown);
+    
     // Split the content into lines for processing
     const lines = markdown.split('\n');
     const fixedLines = [];
@@ -209,32 +249,58 @@ function fixBrokenTables(markdown) {
     // Track if we're in a table
     let inTable = false;
     let tableStartLine = -1;
-    let tableHeader = '';
+    let headers = [];
     let hasTableHeaderRow = false;
     let numColumns = 0;
     
     // Process each line
     for (let i = 0; i < lines.length; i++) {
-      const currentLine = lines[i];
+      const currentLine = lines[i].trim();
       
-      // Check if this line starts a table
-      if (!inTable && currentLine.trim().startsWith('|') && currentLine.trim().endsWith('|')) {
-        inTable = true;
-        tableStartLine = i;
-        tableHeader = currentLine;
-        numColumns = (currentLine.match(/\|/g) || []).length - 1;
-        fixedLines.push(currentLine);
+      // Check if this line might be a table line
+      if (currentLine.startsWith('|') && currentLine.endsWith('|')) {
+        // Count the actual number of columns (pipe characters minus 1)
+        // We need to handle escaped pipes properly
+        const columnMatches = currentLine.match(/(?:\\\|)|(?:\|)/g);
+        const columnCount = columnMatches ? columnMatches.length - 1 : 0;
         
-        // Check if the next line is a separator
-        if (i + 1 < lines.length) {
-          const nextLine = lines[i + 1];
-          if (nextLine.includes('---') && nextLine.includes('|')) {
-            // Next line is a separator, use it
-            hasTableHeaderRow = true;
-            i++;
-            fixedLines.push(nextLine);
+        // Check if this is the start of a new table
+        if (!inTable) {
+          console.log(`Detected table start with ${columnCount} columns`);
+          inTable = true;
+          tableStartLine = i;
+          numColumns = columnCount;
+          headers = currentLine.split('|').slice(1, -1).map(h => h.trim());
+          
+          // Add the table header row
+          fixedLines.push(currentLine);
+          
+          // Check if the next line is a separator
+          if (i + 1 < lines.length) {
+            const nextLine = lines[i + 1].trim();
+            if (nextLine.includes('---') && nextLine.includes('|') && 
+                (nextLine.replace(/[\-\s\|]/g, '') === '')) {
+              // Next line is a separator, use it
+              hasTableHeaderRow = true;
+              i++; // Skip the next line as we're adding a clean version
+              
+              // Add a clean separator row
+              let separator = '|';
+              for (let j = 0; j < numColumns; j++) {
+                separator += ' --- |';
+              }
+              fixedLines.push(separator);
+            } else {
+              // Next line is not a separator, generate one
+              hasTableHeaderRow = true;
+              let separator = '|';
+              for (let j = 0; j < numColumns; j++) {
+                separator += ' --- |';
+              }
+              fixedLines.push(separator);
+            }
           } else {
-            // Next line is not a separator, generate one
+            // If we're at the end of the file, add a separator
             hasTableHeaderRow = true;
             let separator = '|';
             for (let j = 0; j < numColumns; j++) {
@@ -243,58 +309,48 @@ function fixBrokenTables(markdown) {
             fixedLines.push(separator);
           }
         } else {
-          // If we're at the end of the file, add a separator
-          hasTableHeaderRow = true;
-          let separator = '|';
-          for (let j = 0; j < numColumns; j++) {
-            separator += ' --- |';
+          // We're already in a table
+          
+          // Check if this is just another separator row we can skip
+          if (currentLine.replace(/[\|\s-]/g, '').length === 0) {
+            // This is a separator row, we already have one, so skip it
+            console.log(`Skipping extra table separator row: ${currentLine}`);
+            continue;
           }
-          fixedLines.push(separator);
-        }
-      }
-      // Check if we're in a table and this line continues it
-      else if (inTable && currentLine.trim().startsWith('|') && currentLine.trim().endsWith('|')) {
-        // Ensure the line has the correct number of columns
-        const columnCount = (currentLine.match(/\|/g) || []).length - 1;
-        
-        if (columnCount === numColumns) {
-          // Line has correct number of columns
-          fixedLines.push(currentLine);
-        } else if (columnCount < numColumns) {
-          // Line has too few columns, add empty ones
-          let fixedLine = currentLine;
-          for (let j = columnCount; j < numColumns; j++) {
-            if (fixedLine.endsWith('|')) {
-              fixedLine += ' |';
-            } else {
-              fixedLine += ' | |';
+          
+          // Process this data row
+          const cells = splitTableRow(currentLine);
+          
+          // If we have too few or too many columns, fix it
+          if (cells.length !== numColumns) {
+            // Create a fixed row
+            let fixedRow = '|';
+            for (let j = 0; j < numColumns; j++) {
+              fixedRow += (j < cells.length ? ` ${cells[j].trim()} |` : ' |');
             }
+            fixedLines.push(fixedRow);
+          } else {
+            // Row has the correct number of columns
+            fixedLines.push(currentLine);
           }
-          fixedLines.push(fixedLine);
-        } else {
-          // Line has too many columns, truncate
-          let parts = currentLine.split('|');
-          let fixedLine = parts.slice(0, numColumns + 2).join('|');
-          fixedLines.push(fixedLine);
         }
-      }
-      // Check if we're exiting a table
-      else if (inTable && (!currentLine.trim().startsWith('|') || !currentLine.trim().endsWith('|'))) {
-        inTable = false;
-        tableHeader = '';
-        hasTableHeaderRow = false;
-        numColumns = 0;
-        
-        // Add an empty line after the table if there isn't one already
-        if (currentLine.trim() !== '') {
-          fixedLines.push('');
+      } else {
+        // This line is not part of a table
+        if (inTable) {
+          // We're exiting a table
+          inTable = false;
+          hasTableHeaderRow = false;
+          numColumns = 0;
+          headers = [];
+          
+          // Add an empty line after the table if there isn't one already
+          if (currentLine !== '') {
+            fixedLines.push('');
+          }
         }
         
-        fixedLines.push(currentLine);
-      }
-      // Not in a table, just add the line
-      else {
-        fixedLines.push(currentLine);
+        // Add the non-table line
+        fixedLines.push(lines[i]); // Use original line with indentation
       }
     }
     
@@ -474,5 +530,7 @@ module.exports = {
   slugify,
   extractImagePaths,
   fixImagePaths,
-  fixInternalLinks
+  fixInternalLinks,
+  cleanupExcessiveDelimiters,
+  splitTableRow
 };

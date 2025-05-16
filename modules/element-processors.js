@@ -263,9 +263,9 @@ function isComplexCell(cell) {
   
   // Check for multiple paragraphs
   const paragraphs = cell.querySelectorAll('p');
-  if (paragraphs.length > 1) {
-    return true;
-  }
+//  if (paragraphs.length > 1) {
+//    return true;
+//  }
   
   // Check for content with multiple line breaks that would need to be preserved
   const content = cell.textContent.trim();
@@ -293,6 +293,74 @@ function isComplexTable(table) {
   }
   
   return false;
+}
+
+/**
+ * Process table cell content with better handling of HTML elements
+ * @param {Element} cell The table cell
+ * @param {Document} document JSDOM document
+ * @param {Set} processedElements Set of processed elements
+ * @param {string} parentPath Path for debugging
+ * @returns {string} Cell content as markdown
+ */
+function processTableCellContent(cell, document, processedElements, parentPath) {
+  if (!cell) return "";
+  
+  try {
+    // Check if this is a complex cell
+    if (isComplexTableCell(cell)) {
+      // For complex cells, return a simplified representation
+      return simplifyComplexCellContent(cell);
+    }
+    
+    // For simple cells, extract text and basic formatting
+    let content = "";
+    
+    // Process direct text nodes and simple elements
+    for (const child of cell.childNodes) {
+      if (child.nodeType === 3) { // Text node
+        content += child.textContent;
+      } else if (child.nodeType === 1) { // Element node
+        switch (child.tagName.toLowerCase()) {
+          case 'br':
+            content += " ";
+            break;
+          case 'a':
+            const href = child.getAttribute('href') || "";
+            const text = child.textContent.trim();
+            content += `[${text}](${href})`;
+            break;
+          case 'strong':
+          case 'b':
+            content += `**${child.textContent.trim()}**`;
+            break;
+          case 'em':
+          case 'i':
+            content += `*${child.textContent.trim()}*`;
+            break;
+          case 'code':
+            content += `\`${child.textContent.trim()}\``;
+            break;
+          case 'p':
+            // For paragraphs, only add a space if there's already content
+            if (content) content += " ";
+            content += child.textContent.trim();
+            break;
+          default:
+            // For other elements, just use text content
+            content += child.textContent.trim();
+        }
+      }
+    }
+    
+    // Clean up and format the content
+    return content.trim()
+      .replace(/\s+/g, " ")     // Collapse whitespace
+      .replace(/\|/g, "\\|");   // Escape pipe characters
+  } catch (err) {
+    console.error(`Error processing table cell:`, err);
+    return "";
+  }
 }
 
 /**
@@ -324,9 +392,29 @@ function processTable(table, document, processedElements, parentPath) {
     
     // Process regular table that can be converted to Markdown format
     const allTableRows = [];
-    let maxCols = 0;
     const htmlRows = Array.from(table.rows);
     
+    // Determine the maximum number of columns by examining all rows
+    let maxCols = 0;
+    for (const tr of htmlRows) {
+      const cells = Array.from(tr.cells);
+      let colCount = 0;
+      
+      for (const cell of cells) {
+        const colspan = parseInt(cell.getAttribute("colspan") || "1", 10);
+        colCount += colspan;
+      }
+      
+      maxCols = Math.max(maxCols, colCount);
+    }
+    
+    // If no columns detected, exit early
+    if (maxCols === 0) {
+      console.log(`No columns detected in table at ${currentTablePath}`);
+      return "";
+    }
+    
+    // Process each row
     for (const tr of htmlRows) {
       if (processedElements.has(tr)) continue;
       processedElements.add(tr);
@@ -339,10 +427,14 @@ function processTable(table, document, processedElements, parentPath) {
         processedElements.add(td_th);
         const colspan = parseInt(td_th.getAttribute("colspan") || "1", 10);
         
-        // Use processSimpleCellContent for all cells in a regular table
-        const cellContent = processSimpleCellContent(td_th, document, new Set(processedElements), module.exports, `${currentTablePath} > TR > ${(td_th.tagName || "CELL")}`);
-        currentRowCells[currentCellIndex] = cellContent || " ";
+        // Process cell content
+        const cellContent = processTableCellContent(td_th, document, new Set(processedElements), currentTablePath);
         
+        // Ensure cell content is valid for Markdown table
+        const safeContent = safeTableCellContent(cellContent);
+        currentRowCells[currentCellIndex] = safeContent;
+        
+        // Handle colspan by adding empty cells
         for (let k = 1; k < colspan; k++) {
           currentCellIndex++;
           currentRowCells[currentCellIndex] = " "; 
@@ -350,23 +442,29 @@ function processTable(table, document, processedElements, parentPath) {
         currentCellIndex++;
       }
       
+      // Only add rows that have content
       if (currentRowCells.length > 0) {
         allTableRows.push({ 
           type: tr.querySelectorAll("th").length > 0 ? "header" : "data", 
           cells: currentRowCells 
         });
-        maxCols = Math.max(maxCols, currentRowCells.length);
       }
     }
     
-    if (allTableRows.length === 0 || maxCols === 0) {
-        return "";
+    // If no usable rows were found, return empty
+    if (allTableRows.length === 0) {
+      console.log(`No usable rows in table at ${currentTablePath}`);
+      return "";
     }
     
     // Ensure all rows have the same number of columns
     for (const rowObj of allTableRows) {
       while (rowObj.cells.length < maxCols) {
         rowObj.cells.push(" ");
+      }
+      // Trim to maxCols if we have too many
+      if (rowObj.cells.length > maxCols) {
+        rowObj.cells = rowObj.cells.slice(0, maxCols);
       }
     }
     
@@ -376,8 +474,13 @@ function processTable(table, document, processedElements, parentPath) {
     
     for (let i = 0; i < allTableRows.length; i++) {
       const rowObj = allTableRows[i];
-      if (rowObj.cells.every(c => (c || "").trim() === "")) continue;
       
+      // Skip rows with only empty cells
+      if (rowObj.cells.every(c => !c || c.trim() === "")) {
+        continue;
+      }
+      
+      // Add the table row
       markdown += "| " + rowObj.cells.join(" | ") + " |\n";
       
       // Add header separator after the first row or actual header row
@@ -392,6 +495,96 @@ function processTable(table, document, processedElements, parentPath) {
     console.error(`Error processing table (Path: ${currentTablePath}):`, err);
     return "";
   }
+}
+
+/**
+ * Ensure cell content is safe for Markdown tables
+ * @param {string} content Cell content
+ * @returns {string} Safe content for markdown tables
+ */
+function safeTableCellContent(content) {
+  if (!content) return " ";
+  
+  // Clean up content for safe use in Markdown tables
+  return content.trim()
+    .replace(/\n/g, " ")         // Replace newlines with spaces
+    .replace(/\|/g, "\\|")       // Escape pipe characters
+    .replace(/^\s+|\s+$/g, "");  // Trim whitespace
+}
+
+/**
+ * Check if a table cell contains complex content that can't be properly rendered in a Markdown table
+ * @param {Element} cell The cell to check
+ * @returns {boolean} True if complex cell
+ */
+function isComplexTableCell(cell) {
+  if (!cell) return false;
+  
+  // Check for various complex elements
+  if (cell.querySelector('h1, h2, h3, h4, h5, h6, img, ul, ol, table, .panel, .confluence-information-macro, pre, blockquote')) {
+    return true;
+  }
+  
+  // Check for multiple paragraphs
+  const paragraphs = cell.querySelectorAll('p');
+//  if (paragraphs.length > 1) {
+//    return true;
+//  }
+  
+  // Check if content is too long for a table cell
+  if (cell.textContent.trim().length > 100) {
+    return true;
+  }
+  
+  return false;
+}
+
+/**
+ * Create a simplified text representation of complex cell content
+ * @param {Element} cell The cell with complex content
+ * @returns {string} Simplified text representation
+ */
+function simplifyComplexCellContent(cell) {
+  // Handle headings
+  const headings = cell.querySelectorAll('h1, h2, h3, h4, h5, h6');
+  if (headings.length > 0) {
+    return `**${headings[0].textContent.trim()}**`;
+  }
+  
+  // Handle images
+  const images = cell.querySelectorAll('img');
+  if (images.length > 0) {
+    const alt = images[0].getAttribute('alt') || 'image';
+    return `[${alt}]`;
+  }
+  
+  // Handle lists
+  const lists = cell.querySelectorAll('ul, ol');
+  if (lists.length > 0) {
+    // Just summarize the list
+    const items = lists[0].querySelectorAll('li');
+    return `[List: ${items.length} items]`;
+  }
+  
+  // Handle nested tables
+  const tables = cell.querySelectorAll('table');
+  if (tables.length > 0) {
+    return '[Table]';
+  }
+  
+  // Handle panels/macros
+  const panels = cell.querySelectorAll('.panel, .confluence-information-macro');
+  if (panels.length > 0) {
+    return '[Panel]';
+  }
+  
+  // Default: Just use the first 50 chars of text
+  let text = cell.textContent.trim().replace(/\s+/g, ' ');
+  if (text.length > 50) {
+    text = text.substring(0, 47) + '...';
+  }
+  
+  return text;
 }
 
 /**
@@ -706,6 +899,10 @@ module.exports = {
   processLayout,
   processDiv,
   processTable,
+  processTableCellContent,
+  safeTableCellContent,
+  isComplexTableCell,
+  simplifyComplexCellContent,
   processTableAsSections,
   cleanupSectionContent,
   processSimpleCellContent,

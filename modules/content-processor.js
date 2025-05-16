@@ -242,9 +242,9 @@ function isComplexTableCell(cell) {
   
   // Check for multiple paragraphs
   const paragraphs = cell.querySelectorAll('p');
-  if (paragraphs.length > 1) {
-    return true;
-  }
+  //if (paragraphs.length > 1) {
+  //  return true;
+  //}
   
   // Check for content with multiple line breaks that would need to be preserved
   if (cell.innerHTML && cell.innerHTML.includes('<br') && cell.innerHTML.split('<br').length > 2) {
