@@ -49,10 +49,16 @@ function processMetadata(metadataElement, document, processedElements, parentPat
   if (!metadataElement || processedElements.has(metadataElement)) return "";
   const currentPath = `${parentPath || "METADATA_ROOT"} > METADATA${metadataElement.id ? "#"+metadataElement.id : ""}${metadataElement.className ? "."+metadataElement.className.trim().replace(/\s+/g, ".") : ""}`;
   let markdown = "";
+  
   for (const child of metadataElement.childNodes) {
     markdown += contentProcessor.processElementContent(child, document, processedElements, module.exports, currentPath);
   }
-  return markdown.trim() ? `\n<!-- Page Metadata Processed -->\n${markdown.trim()}\n<!-- End Page Metadata -->\n\n` : "";
+  
+  const cleanedMetadata = utilities.cleanupMetadataContent(markdown.trim());
+  
+  // Only return the metadata if it's not being included in frontmatter
+  // You might want to keep this for compatibility, but in practice the metadata is now in frontmatter
+  return cleanedMetadata ? `\n<!-- Page Metadata Processed -->\n${cleanedMetadata}\n<!-- End Page Metadata -->\n\n` : "";
 }
 
 function processAttachmentsSection(attachmentsElement, document, processedElements, parentPath) {

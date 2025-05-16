@@ -454,7 +454,32 @@ function extractImages(document) {
   return Array.from(document.querySelectorAll('img'));
 }
 
+/**
+ * Extract and preserve breadcrumbs from Confluence HTML
+ * @param {Document} document The JSDOM document
+ * @returns {Array} Array of breadcrumb items with text and href
+ */
+function extractBreadcrumbs(document) {
+  const breadcrumbs = [];
+  const breadcrumbItems = document.querySelectorAll('#breadcrumbs li');
+  
+  if (breadcrumbItems && breadcrumbItems.length > 0) {
+    for (const item of breadcrumbItems) {
+      const link = item.querySelector('a');
+      if (link) {
+        breadcrumbs.push({
+          text: link.textContent.trim(),
+          href: link.getAttribute('href')
+        });
+      }
+    }
+  }
+  
+  return breadcrumbs;
+}
+
 module.exports = {
+  extractBreadcrumbs,
   parseFile,
   extractTitle,
   extractLastModified,

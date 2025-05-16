@@ -59,7 +59,7 @@ async function processFile(inputFilePath, outputFilePath, attachmentOption, root
 }
 
 /**
- * Process a directory of HTML files recursively
+ * Process a directory of HTML files recursively with breadcrumb-based structure
  * @param {string} inputDir Input directory
  * @param {string} outputDir Output directory
  * @param {string} attachmentOption Option for attachment visibility
@@ -70,32 +70,82 @@ async function processDirectory(inputDir, outputDir, attachmentOption) {
     // Create output directory
     await fs.mkdir(outputDir, { recursive: true });
     
-    // Get all files in directory
-    const entries = await fs.readdir(inputDir, { withFileTypes: true });
+    // First pass: Analyze all HTML files and extract breadcrumbs
+    const breadcrumbMap = new Map();
+    const filesToProcess = [];
     
-    // Process each entry
-    for (const entry of entries) {
-      const fullInputPath = path.join(inputDir, entry.name);
+    const analyzeEntries = async (dir, relativePath = '') => {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
       
-      if (entry.isDirectory()) {
-        // Skip special directories
-        if (["attachments", "images"].includes(entry.name)) {
-          continue;
-        }
+      for (const entry of entries) {
+        const fullInputPath = path.join(dir, entry.name);
+        const entryRelativePath = path.join(relativePath, entry.name);
         
-        // Process subdirectory
-        const subOutputDir = path.join(outputDir, entry.name);
-        // Pass the main outputDir as rootOutputDir for correct relative path calculations
-        await processDirectory(fullInputPath, subOutputDir, attachmentOption, outputDir);
-      } else if (entry.name.endsWith(".html")) {
-        // Process HTML file
-        const outputFilePath = path.join(
-          outputDir,
-          entry.name.replace(/\.html$/, ".md")
-        );
-        // Pass the main outputDir as rootOutputDir
-        await processFile(fullInputPath, outputFilePath, attachmentOption, outputDir);
+        if (entry.isDirectory()) {
+          // Skip special directories
+          if (["attachments", "images"].includes(entry.name)) {
+            continue;
+          }
+          
+          // Analyze subdirectory
+          await analyzeEntries(fullInputPath, entryRelativePath);
+        } else if (entry.name.endsWith(".html")) {
+          // Extract breadcrumbs for this file
+          try {
+            const document = await htmlParser.parseFile(fullInputPath);
+            const breadcrumbs = htmlParser.extractBreadcrumbs(document);
+            
+            // Store the file for processing with its breadcrumbs
+            filesToProcess.push({
+              inputPath: fullInputPath,
+              relativePath: entryRelativePath,
+              breadcrumbs
+            });
+            
+            breadcrumbMap.set(fullInputPath, breadcrumbs);
+          } catch (e) {
+            console.error(`Error analyzing breadcrumbs for ${fullInputPath}:`, e);
+            // Still add the file for processing without breadcrumbs
+            filesToProcess.push({
+              inputPath: fullInputPath,
+              relativePath: entryRelativePath,
+              breadcrumbs: []
+            });
+          }
+        }
       }
+    };
+    
+    // Analyze all files
+    await analyzeEntries(inputDir);
+    
+    // Second pass: Process each file and create appropriate directories
+    for (const file of filesToProcess) {
+      // Determine output path based on breadcrumbs
+      let outputPath = '';
+      
+      if (file.breadcrumbs && file.breadcrumbs.length > 0) {
+        // Create a path based on breadcrumbs (excluding the last one which is the current page)
+        const pathSegments = file.breadcrumbs.slice(0, -1).map(crumb => 
+          utilities.sanitizeFilename(crumb.text)
+        );
+        
+        // Join the breadcrumb-based path with the output directory
+        outputPath = path.join(outputDir, ...pathSegments);
+      } else {
+        // Use the original relative path if no breadcrumbs
+        outputPath = path.join(outputDir, path.dirname(file.relativePath));
+      }
+      
+      // Ensure the directory exists
+      await fs.mkdir(outputPath, { recursive: true });
+      
+      // Determine the output filename
+      const baseName = path.basename(file.inputPath, '.html');
+      const outputFilePath = path.join(outputPath, `${baseName}.md`);
+      
+      // Process the file
+      await processFile(file.inputPath, outputFilePath, attachmentOption, outputDir);
     }
   } catch (err) {
     console.error(`Error processing directory ${inputDir}:`, err);

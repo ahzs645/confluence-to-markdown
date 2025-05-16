@@ -521,6 +521,21 @@ function fixInternalLinks(markdown, linkMap) {
   }
 }
 
+/**
+ * Clean up and fix problematic characters in metadata content
+ * @param {string} metadataText The metadata text to clean
+ * @returns {string} Cleaned metadata text
+ */
+function cleanupMetadataContent(metadataText) {
+  if (!metadataText) return '';
+  
+  return metadataText
+    .replace(/\/\s+/g, ' ') // Replace slashes followed by whitespace with just whitespace
+    .replace(/\s+—>/g, ' -->') // Fix potentially malformed comment closing
+    .replace(/\s+>/g, ' >') // Fix problematic angle brackets
+    .trim();
+}
+
 module.exports = {
   cleanupMarkdown,
   fixBrokenTables,
@@ -532,5 +547,6 @@ module.exports = {
   fixImagePaths,
   fixInternalLinks,
   cleanupExcessiveDelimiters,
-  splitTableRow
+  splitTableRow,
+  cleanupMetadataContent
 };

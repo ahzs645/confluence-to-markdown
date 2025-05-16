@@ -30,15 +30,76 @@ async function generateMarkdown(document, attachmentOption = "visible", mdFilePa
     const title = htmlParser.extractTitle(document);
     const lastModified = htmlParser.extractLastModified(document);
     
-    let markdown = `---\ntitle: "${utilities.escapeYaml(title)}"\nlastModified: "${utilities.escapeYaml(lastModified)}"\n---\n\n# ${title}\n\n`;
+    // Add breadcrumb extraction
+    const breadcrumbs = htmlParser.extractBreadcrumbs(document);
+    
+    // Extract metadata for frontmatter
+    const pageMetadata = document.querySelector(".page-metadata");
+    let createdBy = "";
+    let createdDate = "";
+    
+    if (pageMetadata) {
+      console.log("[REGRESSION_DEBUG] markdown-generator.js: Extracting detailed metadata...");
+      const metadataContent = pageMetadata.textContent.trim();
+      
+      // Extract author information
+      const authorMatch = metadataContent.match(/Created by\s+(.*?)(?:,|\s+last)/i);
+      if (authorMatch && authorMatch[1]) {
+        createdBy = authorMatch[1].trim();
+      }
+      
+      // Extract created date
+      const createdDateMatch = metadataContent.match(/on\s+([A-Z][a-z]{2}\s+\d{1,2},\s+\d{4}|[A-Z][a-z]{2}\s+\d{1,2}\s+\d{4})/i);
+      if (createdDateMatch && createdDateMatch[1]) {
+        createdDate = createdDateMatch[1].trim();
+      }
+    }
+    
+    // Generate enhanced frontmatter
+    let frontmatter = `---\n`;
+    frontmatter += `title: "${utilities.escapeYaml(title)}"\n`;
+    
+    if (createdBy) {
+      frontmatter += `created_by: "${utilities.escapeYaml(createdBy)}"\n`;
+    }
+    
+    if (createdDate) {
+      frontmatter += `created_date: "${utilities.escapeYaml(createdDate)}"\n`;
+    }
+    
+    frontmatter += `last_modified: "${utilities.escapeYaml(lastModified)}"\n`;
+    
+    // Add breadcrumb data to frontmatter
+    if (breadcrumbs && breadcrumbs.length > 0) {
+      frontmatter += `breadcrumbs:\n`;
+      for (const crumb of breadcrumbs) {
+        frontmatter += `  - title: "${utilities.escapeYaml(crumb.text)}"\n`;
+        frontmatter += `    url: "${utilities.escapeYaml(crumb.href)}"\n`;
+      }
+    }
+    
+    frontmatter += `---\n\n`;
+    
+    // Build the markdown content
+    let markdown = frontmatter;
+    
+    // Add visible breadcrumbs navigation
+    if (breadcrumbs && breadcrumbs.length > 0) {
+      markdown += '> ';
+      markdown += breadcrumbs.map(crumb => `[${crumb.text}](${crumb.href})`).join(' > ');
+      markdown += '\n\n';
+    }
+    
+    markdown += `# ${title}\n\n`;
     
     const processedElements = new Set(); 
     
-    const pageMetadata = document.querySelector(".page-metadata");
+    // Process page metadata in a cleaner way, but exclude it from the main markdown since we're using frontmatter
     if (pageMetadata) {
       console.log("[REGRESSION_DEBUG] markdown-generator.js: Processing page metadata...");
-      const metadataContent = elementProcessors.processMetadata(pageMetadata, document, processedElements, "METADATA_SECTION");
-      if (metadataContent) markdown += metadataContent;
+      // The metadata is already in frontmatter, so we're only extracting it here
+      // but not adding to markdown since it would be duplicate
+      elementProcessors.processMetadata(pageMetadata, document, processedElements, "METADATA_SECTION");
       console.log("[REGRESSION_DEBUG] markdown-generator.js: Finished processing page metadata.");
     }
     
@@ -136,4 +197,3 @@ async function generateMarkdown(document, attachmentOption = "visible", mdFilePa
 module.exports = {
   generateMarkdown
 };
-
