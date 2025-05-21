@@ -1,20 +1,30 @@
 // modules/content-processor.js - COMPREHENSIVE FIX V8 (Revised processedElements handling)
 /**
- * Shared content processing functions to avoid circular dependencies
- * Complete overhaul for proper handling of all content elements
- * processElementContent now consistently adds element to processedElements before dispatching.
+ * @fileoverview Shared content processing functions.
+ * This module provides the core logic for recursively processing HTML elements
+ * and converting them into Markdown. It handles various element types and ensures
+ * that elements are not processed multiple times. It also includes utilities for
+ * handling specific scenarios like table cell content and ignoring irrelevant elements.
  */
 
 const path = require("path");
 
 /**
- * Clean and format cell content for Markdown tables, handling complex content
- * @param {Element} cell The table cell
- * @param {Document} document JSDOM document
- * @param {Set} processedElements Set of already processed elements
- * @param {Object} processors Module containing processor functions
- * @param {string} parentPath Parent path for debugging
- * @returns {string} Cleaned cell content
+ * Recursively processes an HTML element and its children, converting them to Markdown.
+ * This is the central function for content conversion. It identifies the element type
+ * and dispatches to the appropriate handler in the `processors` object.
+ * It also manages a set of `processedElements` to avoid infinite loops and redundant processing.
+ *
+ * @param {Node} element - The HTML DOM Node (Element, TextNode, etc.) to process.
+ * @param {Document} document - The JSDOM document object.
+ * @param {Set<Node>} processedElements - A set of already processed DOM nodes.
+ * @param {Object<string, function>} processors - An object mapping element tag names (or types) to processor functions.
+ *                                                These functions are responsible for converting specific elements to Markdown.
+ *                                                It's expected to contain functions like `processDiv`, `processTable`, etc.,
+ *                                                and also `processElementContent` itself for recursive calls.
+ * @param {string} [parentPath="ROOT"] - A string representing the path of parent elements, used for debugging and context.
+ * @returns {string} The Markdown representation of the processed element and its children. Returns an empty string
+ *                   if the element is null, should be ignored, or has already been processed.
  */
 function processElementContent(element, document, processedElements, processors, parentPath = "ROOT") {
   if (!element || !element.nodeType) return "";
@@ -45,153 +55,55 @@ function processElementContent(element, document, processedElements, processors,
 
     switch (tagName) {
       case "DIV":
-        console.log(`processElementContent [${currentPath}]: Calling processDiv.`);
-        markdown += processors.processDiv(element, document, processedElements, currentPath);
+        markdown += processors.processDiv(element, document, processedElements, processors, currentPath);
         break;
       case "TABLE":
-        console.log(`processElementContent [${currentPath}]: Calling processTable.`);
-        markdown += processors.processTable(element, document, processedElements, currentPath);
+        markdown += processors.processTable(element, document, processedElements, processors, currentPath);
         break;
       case "P":
-        console.log(`processElementContent [${currentPath}]: Processing P.`);
-        let paragraphContent = "";
-        for (const child of element.childNodes) {
-          paragraphContent += processElementContent(child, document, processedElements, processors, currentPath);
-        }
-        if (paragraphContent.trim()) {
-          markdown += paragraphContent.trim() + "\n\n";
-        }
+        markdown += processors.processParagraphElement(element, document, processedElements, processors, currentPath);
         break;
       case "H1": case "H2": case "H3": case "H4": case "H5": case "H6":
-        // Direct the heading processing to the specialized header processor
-        // This avoids double processing that leads to "# # Heading" patterns
-        console.log(`processElementContent [${currentPath}]: Calling processHeader for ${tagName}.`);
-        markdown += processors.processHeader(element, document, processedElements, currentPath);
+        markdown += processors.processHeader(element, document, processedElements, processors, currentPath);
         break;
       case "UL":
-        console.log(`processElementContent [${currentPath}]: Processing UL.`);
-        for (const li of element.children) {
-            if (li.tagName === "LI") { // processElementContent will handle processed check for li
-                let itemContent = processElementContent(li, document, processedElements, processors, currentPath);
-                itemContent = itemContent.trim();
-                if (itemContent.includes("\n")) {
-                    const lines = itemContent.split("\n");
-                    const firstLine = lines.shift();
-                    markdown += `- ${firstLine}\n`;
-                    for (const line of lines) {
-                        markdown += line.trim() ? `  ${line}\n` : "\n";
-                    }
-                } else {
-                    markdown += `- ${itemContent}\n`;
-                }
-            }
-        }
-        markdown += "\n";
+        markdown += processors.processUnorderedListElement(element, document, processedElements, processors, currentPath);
         break;
       case "OL":
-        console.log(`processElementContent [${currentPath}]: Processing OL.`);
-        let i = 1;
-        for (const li of element.children) {
-            if (li.tagName === "LI") { // processElementContent will handle processed check for li
-                let itemContent = processElementContent(li, document, processedElements, processors, currentPath);
-                itemContent = itemContent.trim();
-                if (itemContent.includes("\n")) {
-                    const lines = itemContent.split("\n");
-                    const firstLine = lines.shift();
-                    markdown += `${i}. ${firstLine}\n`;
-                    for (const line of lines) {
-                        markdown += line.trim() ? `   ${line}\n` : "\n";
-                    }
-                } else {
-                    markdown += `${i}. ${itemContent}\n`;
-                }
-                i++;
-            }
-        }
-        markdown += "\n";
+        markdown += processors.processOrderedListElement(element, document, processedElements, processors, currentPath);
         break;
       case "LI":
-        console.log(`processElementContent [${currentPath}]: Processing LI.`);
-        for (const child of element.childNodes) {
-          markdown += processElementContent(child, document, processedElements, processors, currentPath);
-        }
+        markdown += processors.processListItemElement(element, document, processedElements, processors, currentPath);
         break;
       case "A":
-        console.log(`processElementContent [${currentPath}]: Calling processLink.`);
-        markdown += processors.processLink(element, document, processedElements, processElementContent, currentPath);
+        markdown += processors.processLink(element, document, processedElements, processors, currentPath);
         break;
       case "IMG":
-        console.log(`processElementContent [${currentPath}]: Calling processImage.`);
-        markdown += processors.processImage(element, currentPath);
+        markdown += processors.processImage(element, document, processedElements, processors, currentPath);
         break;
       case "STRONG": case "B":
-        console.log(`processElementContent [${currentPath}]: Processing ${tagName}.`);
-        let boldText = "";
-        for (const child of element.childNodes) {
-          boldText += processElementContent(child, document, processedElements, processors, currentPath);
-        }
-        markdown += `**${boldText}**`;
+        markdown += processors.processStrongOrBoldElement(element, document, processedElements, processors, currentPath);
         break;
       case "EM": case "I":
-        console.log(`processElementContent [${currentPath}]: Processing ${tagName}.`);
-        let italicText = "";
-        for (const child of element.childNodes) {
-          italicText += processElementContent(child, document, processedElements, processors, currentPath);
-        }
-        markdown += `*${italicText}*`;
+        markdown += processors.processEmphasisOrItalicElement(element, document, processedElements, processors, currentPath);
         break;
       case "CODE":
-        console.log(`processElementContent [${currentPath}]: Processing CODE.`);
-        let codeText = "";
-        for (const child of element.childNodes) {
-          // For CODE, we might want raw text content, not recursively processed markdown
-          codeText += child.textContent; // Simpler for code
-        }
-        if (element.parentElement && element.parentElement.tagName.toUpperCase() === "PRE") {
-            markdown += codeText;
-        } else {
-            markdown += `\\[${codeText}\\]`;
-        }
+        markdown += processors.processCodeElement(element, document, processedElements, processors, currentPath);
         break;
       case "PRE":
-        console.log(`processElementContent [${currentPath}]: Processing PRE.`);
-        let preText = "";
-        // For PRE, get text content, often contains a CODE child
-        preText = element.textContent; // Simpler for preformatted text
-        const language = element.getAttribute("data-language") || element.className.match(/language-(\S+)/)?.[1] || "";
-        markdown += `\\[\\[\\[${language}\n${preText.trim()}\n\\]\\]\\]\n\n`;
+        markdown += processors.processPreformattedElement(element, document, processedElements, processors, currentPath);
         break;
       case "BR":
-        console.log(`processElementContent [${currentPath}]: Processing BR.`);
-        markdown += "\n";
+        markdown += processors.processBreakElement(element, document, processedElements, processors, currentPath);
         break;
       case "HR":
-        console.log(`processElementContent [${currentPath}]: Processing HR.`);
-        markdown += "\n---\n\n";
+        markdown += processors.processHorizontalRuleElement(element, document, processedElements, processors, currentPath);
         break;
       case "SPAN":
-        console.log(`processElementContent [${currentPath}]: Processing SPAN.`);
-        if (element.classList && element.classList.contains("highlight")) {
-          let highlightText = "";
-          for (const child of element.childNodes) {
-            highlightText += processElementContent(child, document, processedElements, processors, currentPath);
-          }
-          markdown += `**${highlightText}**`;
-        } else if (element.classList && element.classList.contains("status-macro")) {
-          let statusText = element.textContent.trim();
-          markdown += `\\[${statusText}\\]`;
-        } else {
-          console.log(`processElementContent [${currentPath}]: Processing generic SPAN.`);
-          for (const child of element.childNodes) {
-            markdown += processElementContent(child, document, processedElements, processors, currentPath);
-          }
-        }
+        markdown += processors.processSpanElement(element, document, processedElements, processors, currentPath);
         break;
       default:
-        console.log(`processElementContent [${currentPath}]: Processing DEFAULT case for ${tagName}, iterating children.`);
-        for (const child of element.childNodes) {
-          markdown += processElementContent(child, document, processedElements, processors, currentPath);
-        }
+        markdown += processors.processDefaultElement(element, document, processedElements, processors, currentPath);
     }
     console.log(`processElementContent [${currentPath}]: END for ${tagName}, accumulated markdown length: ${markdown.length}`);
     return markdown;
@@ -201,13 +113,29 @@ function processElementContent(element, document, processedElements, processors,
   return "";
 }
 
+/**
+ * Cleans and formats the content of a table cell for Markdown table representation.
+ * If the cell contains complex content (e.g., nested tables, block elements),
+ * it uses `processors.simplifyComplexCellContent`. Otherwise, it processes the
+ * cell's content recursively and then cleans it for Markdown table compatibility
+ * (e.g., removes newlines, escapes pipe characters).
+ *
+ * @param {Element} cell - The HTML TD or TH element.
+ * @param {Document} document - The JSDOM document object.
+ * @param {Set<Node>} processedElements - A set of already processed DOM nodes, passed to recursive calls.
+ * @param {Object<string, function>} processors - An object containing processor functions, including
+ *                                                `isComplexTableCell` and `simplifyComplexCellContent`.
+ * @param {string} parentPath - The debug path of the parent element.
+ * @returns {string} The cleaned and formatted Markdown content of the cell.
+ */
 function cleanCellContent(cell, document, processedElements, processors, parentPath) {
   if (!cell) return "";
   
   // Check if the cell contains complex content
-  if (isComplexTableCell(cell)) {
+  // Use the versions from the processors object, which should come from element-processors.js
+  if (processors.isComplexTableCell(cell)) {
     // For complex cells, return simplified representation
-    return simplifyComplexCell(cell);
+    return processors.simplifyComplexCellContent(cell);
   }
   
   // For simple cells, process content with better formatting
@@ -228,9 +156,13 @@ function cleanCellContent(cell, document, processedElements, processors, parentP
 }
 
 /**
- * Check if a cell contains complex content that can't be properly rendered in a Markdown table
- * @param {Element} cell The cell to check
- * @returns {boolean} True if complex cell
+ * Checks if a table cell contains complex content that cannot be easily rendered
+ * within a standard Markdown table cell (e.g., nested tables, block elements, multiple paragraphs).
+ * This version is local to content-processor and might be used if `processors.isComplexTableCell` isn't available,
+ * though the intention is usually to use the one from the `processors` object.
+ *
+ * @param {Element} cell - The HTML TD or TH element to check.
+ * @returns {boolean} True if the cell is considered complex, false otherwise.
  */
 function isComplexTableCell(cell) {
   if (!cell) return false;
@@ -255,9 +187,14 @@ function isComplexTableCell(cell) {
 }
 
 /**
- * Create a simplified representation of complex cell content
- * @param {Element} cell The complex cell
- * @returns {string} Simplified representation
+ * Creates a simplified textual representation of complex cell content.
+ * This is used when `isComplexTableCell` determines that a cell's content
+ * is too complex for direct Markdown table rendering. It provides a placeholder
+ * or summary (e.g., "[Image]", "[List with 5 items]").
+ * This version is local to content-processor.
+ *
+ * @param {Element} cell - The complex HTML TD or TH element.
+ * @returns {string} A simplified string representation of the cell's content.
  */
 function simplifyComplexCell(cell) {
   // Handle headings - extract text and preserve as a strong text
@@ -310,8 +247,24 @@ function simplifyComplexCell(cell) {
   return text;
 }
 
+/**
+ * Determines if an HTML element should be ignored during processing.
+ * This function checks for various conditions:
+ * - Null or non-element nodes.
+ * - Comment nodes.
+ * - Specific tag names (SCRIPT, STYLE, NOSCRIPT, BUTTON).
+ * - Elements with `aria-hidden="true"`.
+ * - Elements with `display:none` or `visibility:hidden` styles.
+ * - Elements matching globally excluded class names or IDs.
+ * - Elements not within the "MAIN_CONTENT_ROOT" path (unless explicitly processed earlier).
+ *
+ * @param {Node} element - The HTML DOM Node to check.
+ * @param {string} currentPath - The debug path of the current element.
+ * @param {string} parentPath - The debug path of the parent element.
+ * @returns {boolean} True if the element should be ignored, false otherwise.
+ */
 function shouldBeIgnored(element, currentPath, parentPath) {
-  if (!element || !element.tagName) return true;
+  if (!element || !element.tagName) return true; // Also handles non-Element nodes if tagName is primary interest
   if (element.nodeType === 8) { console.log(`shouldBeIgnored [${currentPath} from ${parentPath}]: Ignoring COMMENT node.`); return true; }
   
   const tagName = element.tagName.toUpperCase();
@@ -328,24 +281,24 @@ function shouldBeIgnored(element, currentPath, parentPath) {
   }
   if (element.id && globallyExcludeIds.includes(element.id)) { console.log(`shouldBeIgnored [${currentPath} from ${parentPath}]: Ignoring due to global ID: ${element.id}`); return true; }
 
-  if (!parentPath.includes("MAIN_CONTENT_ROOT")) { // Check against MAIN_CONTENT_ROOT from markdown-generator
-    // More aggressive exclusions if not in main content.
-  } else {
-    console.log(`shouldBeIgnored [${currentPath} from ${parentPath}]: Element is in MAIN_CONTENT_ROOT, NOT ignoring by default rules here.`);
-    return false; 
+  // If an element has not been ignored by any of the global rules above,
+  // check its path context. Elements not within MAIN_CONTENT_ROOT are generally ignored.
+  if (!parentPath.includes("MAIN_CONTENT_ROOT")) {
+    console.log(`shouldBeIgnored [${currentPath} from ${parentPath}]: Element is NOT in MAIN_CONTENT_ROOT (path: ${parentPath}), ignoring.`);
+    return true; 
   }
 
-  console.log(`shouldBeIgnored [${currentPath} from ${parentPath}]: NOT ignoring (default evaluation).`);
+  // If it's in MAIN_CONTENT_ROOT and not caught by any rule above, then don't ignore it.
+  console.log(`shouldBeIgnored [${currentPath} from ${parentPath}]: Element is in MAIN_CONTENT_ROOT (path: ${parentPath}) and not globally excluded, NOT ignoring.`);
   return false;
 }
 
 module.exports = {
   cleanCellContent,
-  isComplexTableCell,
-  simplifyComplexCell,
-  processElementContent,
-  cleanCellContent,
-  shouldBeIgnored
+  isComplexTableCell, 
+  simplifyComplexCell,  
+  processElementContent, 
+  shouldBeIgnored,
 };
 
 

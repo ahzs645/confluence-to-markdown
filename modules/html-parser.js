@@ -1,7 +1,9 @@
-// modules/html-parser.js - COMPREHENSIVE FIX
+// modules/html-parser.js
 /**
- * Module for parsing HTML content and extracting document structure
- * Completely overhauled to properly handle Confluence content
+ * @fileoverview This module is responsible for parsing HTML files and extracting
+ * structured information such as title, metadata, main content, attachments,
+ * breadcrumbs, and various specific HTML elements like tables and panels.
+ * It uses JSDOM for parsing HTML content.
  */
 
 const { JSDOM } = require('jsdom');
@@ -9,9 +11,11 @@ const fs = require('fs/promises');
 const path = require('path');
 
 /**
- * Parse an HTML file and return a JSDOM document
- * @param {string} filePath Path to HTML file
- * @returns {Promise<Document>} JSDOM document
+ * Parses an HTML file from the given file path and returns a JSDOM document object.
+ * @async
+ * @param {string} filePath - The absolute or relative path to the HTML file.
+ * @returns {Promise<Document>} A promise that resolves to a JSDOM `Document` object.
+ * @throws {Error} If reading the file or parsing the HTML content fails.
  */
 async function parseFile(filePath) {
   try {
@@ -25,486 +29,482 @@ async function parseFile(filePath) {
 }
 
 /**
- * Extract the document title from parsed HTML
- * @param {Document} document JSDOM document
- * @returns {string} Document title
+ * Extracts the document title from a JSDOM document.
+ * It tries a series of selectors, prioritizing Confluence-specific title elements,
+ * then common heading elements (`<h1>`), and finally the HTML `<title>` tag.
+ * Also cleans common prefixes and decodes HTML entities.
+ * @param {Document} document - The JSDOM `Document` object.
+ * @returns {string} The extracted and cleaned document title, or "Untitled Page" if no title can be determined.
  */
 function extractTitle(document) {
-  // Try different elements where title might be found
-  const titleElement = document.querySelector('#title-text') || 
-                      document.querySelector('.pagetitle') ||
-                      document.querySelector('#title-heading .page-title') ||
-                      document.querySelector('#title-heading') ||
-                      document.querySelector('h1');
+  const titleSelectors = [
+    '#title-text', // Confluence specific
+    '.pagetitle',  // Common class for page titles
+    '#title-heading .page-title', // Confluence specific
+    '#title-heading', // Confluence specific
+    'h1' // Generic H1
+  ];
   
   let title = '';
-  if (titleElement) {
-    // Get text from the title element, or from its child #title-text if present
-    const titleTextElement = titleElement.querySelector('#title-text');
-    title = titleTextElement ? titleTextElement.textContent.trim() : titleElement.textContent.trim();
-    
-    // Remove any prefix like "CIS Integrated Healthcare : "
-    title = title.replace(/^.*\s*:\s*/, '');
-  } else if (document.title) {
-    title = document.title.trim().replace(/^.*\s*:\s*/, '');
-  } else {
-    title = 'Untitled Page';
+  for (const selector of titleSelectors) {
+    const element = document.querySelector(selector);
+    if (element) {
+      title = element.querySelector('#title-text') ? element.querySelector('#title-text').textContent.trim() : element.textContent.trim();
+      break;
+    }
+  }
+
+  if (!title && document.title) {
+    title = document.title.trim();
   }
   
-  // Decode HTML entities
-  const txt = document.createElement('textarea');
-  txt.innerHTML = title;
-  title = txt.value;
+  // Clean common prefixes (e.g., from Confluence exports)
+  title = title.replace(/^.*\s*:\s*/, '');
+  if (!title) title = 'Untitled Page';
   
-  return title;
+  // Decode HTML entities that might be present
+  const textarea = document.createElement('textarea');
+  textarea.innerHTML = title;
+  return textarea.value;
 }
 
 /**
- * Extract the last modified date from parsed HTML
- * @param {Document} document JSDOM document
- * @returns {string} Last modified date
+ * Extracts the last modified date or author information from a JSDOM document.
+ * It searches for elements matching a predefined list of selectors commonly used
+ * for this information (e.g., `.last-modified`, `.page-metadata`).
+ * @param {Document} document - The JSDOM `Document` object.
+ * @returns {string} The text content representing the last modified information,
+ *                   or an empty string if not found.
  */
 function extractLastModified(document) {
-  // Try all possible selectors for last modified info
   const selectors = [
-    '.last-modified', 
-    '.page-metadata .editor',
-    '.page-metadata'
+    '.last-modified',          // Common class
+    '.page-metadata .editor',  // Confluence specific
+    '.page-metadata time',     // More specific metadata time element
+    '.page-metadata'           // General metadata container
   ];
   
   for (const selector of selectors) {
     const element = document.querySelector(selector);
     if (element) {
-      // Check if we're looking at the page-metadata container
-      if (selector === '.page-metadata') {
-        // Extract the text that contains "last updated by"
+      if (selector === '.page-metadata') { // Special handling for generic container
         const text = element.textContent.trim();
-        const match = text.match(/last updated by\s+(.*?)(?:\s+on\s+(.*))?$/i);
-        if (match) {
-          return match[1].trim();
-        }
+        const match = text.match(/last updated by\s+(.*?)(?:\s+on\s+(.*))?$/i); // Try to find specific text pattern
+        if (match && match[1]) return match[1].trim(); // Return user/date part
       } else {
         return element.textContent.trim();
       }
     }
   }
-  
-  return '';
+  return ''; // Not found
 }
 
 /**
- * Find the main content element in parsed HTML
- * @param {Document} document JSDOM document
- * @returns {Element} Main content element
+ * Finds the main content container element within a JSDOM document.
+ * It iterates through a list of common selectors used for identifying main content areas
+ * (e.g., `#main-content`, `.wiki-content`, `main`).
+ * @param {Document} document - The JSDOM `Document` object.
+ * @returns {Element} The first matching main content element found, or `document.body` as a fallback
+ *                    if no specific main content container is identified.
  */
 function findMainContent(document) {
-  // First try to find the specific content container used in Confluence
-  const contentOptions = [
-    '#main-content',
-    '#content .wiki-content',
-    '.wiki-content',
-    '#content',
-    '.view',
-    'body'
+  const contentSelectors = [
+    '#main-content',             // Common ID for main content
+    '.wiki-content',             // Confluence specific
+    '#content .wiki-content',    // More specific Confluence
+    '#content',                  // Generic content ID
+    'main',                      // HTML5 main element
+    '.main-container',           // Common class
+    '.view',                     // Another common class
+    'article'                    // HTML5 article element
   ];
 
-  for (const selector of contentOptions) {
+  for (const selector of contentSelectors) {
     const element = document.querySelector(selector);
-    if (element) {
-      return element;
+    if (element) return element;
+  }
+  console.warn("No specific main content element found, falling back to document.body.");
+  return document.body; // Fallback
+}
+
+// --- Attachment Extraction Helpers ---
+
+/**
+ * @private
+ * Extracts attachments that are explicitly linked using `data-linked-resource-type="attachment"`
+ * attributes on `<a>`, `<div>`, or `<img>` tags. Populates the provided `attachments` map.
+ * @param {Document} document - The JSDOM `Document` object.
+ * @param {Map<string, {id: string, filename: string, containerId: string|null, href: string}>} attachments - The map to populate with extracted attachment information.
+ *        Keys are attachment IDs, values are objects with attachment details.
+ */
+function extractLinkedResourceAttachments(document, attachments) {
+  const attachmentLinks = document.querySelectorAll('a[data-linked-resource-type="attachment"], div[data-linked-resource-type="attachment"]'); // Also check divs with this data attribute
+  for (const link of attachmentLinks) {
+    const id = link.getAttribute('data-linked-resource-id');
+    // For divs, filename might be in data-linked-resource-default-alias, for <a> it's textContent
+    const filename = link.tagName === 'DIV' ? link.getAttribute('data-linked-resource-default-alias') : link.textContent.trim();
+    const containerId = link.getAttribute('data-linked-resource-container-id');
+    let href = link.getAttribute('href'); // May be null for divs
+
+    if (!href && link.tagName === 'DIV' && filename) { // Construct href for DIVs if not present
+        href = `attachments/${containerId}/${id}/${filename}`; // A common pattern
+    }
+    
+    if (id && filename && href && !attachments.has(id)) {
+      attachments.set(id, {
+        id, filename, containerId,
+        href: href.startsWith('http') ? href : path.normalize(href).replace(/\\/g, '/') // Normalize and ensure forward slashes
+      });
     }
   }
 
-  // Fallback to the body if nothing else found
-  return document.body;
+  const imageLinks = document.querySelectorAll('img[data-linked-resource-type="attachment"]');
+  for (const img of imageLinks) {
+    const id = img.getAttribute('data-linked-resource-id');
+    const src = img.getAttribute('src');
+    if (id && src && !attachments.has(id)) {
+      const filename = path.basename(src);
+      const containerId = img.getAttribute('data-linked-resource-container-id');
+      attachments.set(id, {
+        id, filename, containerId,
+        href: src.startsWith('http') ? src : path.normalize(src).replace(/\\/g, '/')
+      });
+    }
+  }
 }
 
 /**
- * Find all panels in the document
- * @param {Document} document JSDOM document
- * @returns {Element[]} Array of panel elements
+ * @private
+ * Extracts attachments embedded as images (`<img>` tags) where the `src` attribute
+ * points to a path typically containing "attachments/". Populates the provided `attachments` map.
+ * It attempts to heuristically derive an ID and container ID from the image `src` path.
+ * @param {Document} document - The JSDOM `Document` object.
+ * @param {Map<string, {id: string, filename: string, containerId: string|null, href: string}>} attachments - The map to populate with extracted attachment information.
+ */
+function extractImageSrcAttachments(document, attachments) {
+  const regularImages = document.querySelectorAll('img[src*="attachments/"]'); // More general match
+  for (const img of regularImages) {
+    const src = img.getAttribute('src');
+    if (src) {
+      const filename = path.basename(src);
+      // Try to derive an ID. This is heuristic.
+      // Example: attachments/12345/67890/image.png -> id=67890, containerId=12345
+      // Example: attachments/image.png -> id=filename
+      const parts = src.split('/');
+      let id = filename; // Default id to filename if no numeric ID found
+      let containerId = null; 
+      const attachmentsIndex = parts.indexOf('attachments');
+      if (attachmentsIndex !== -1 && attachmentsIndex + 2 < parts.length && /^\d+$/.test(parts[attachmentsIndex+1]) && /^\d+$/.test(parts[attachmentsIndex+2])) {
+          containerId = parts[attachmentsIndex+1];
+          id = parts[attachmentsIndex+2];
+      } else if (attachmentsIndex !== -1 && attachmentsIndex + 1 < parts.length && /^\d+$/.test(parts[attachmentsIndex+1])) {
+          id = parts[attachmentsIndex+1]; // If only one numeric part after /attachments/
+      }
+
+
+      if (!attachments.has(id)) { // Add if ID (derived or filename) is not already there
+        attachments.set(id, {
+          id, filename, containerId,
+          href: src.startsWith('http') ? src : path.normalize(src).replace(/\\/g, '/')
+        });
+      }
+    }
+  }
+}
+
+/**
+ * @private
+ * Extracts attachments from links found within elements having the class "greybox".
+ * This is a common pattern in Confluence pages for listing attachments.
+ * Populates the provided `attachments` map.
+ * @param {Document} document - The JSDOM `Document` object.
+ * @param {Map<string, {id: string, filename: string, containerId: string|null, href: string}>} attachments - The map to populate with extracted attachment information.
+ */
+function extractGreyboxAttachments(document, attachments) {
+  const greyboxes = document.querySelectorAll('.greybox'); // Confluence specific for attachment lists
+  for (const greybox of greyboxes) {
+    const greyboxLinks = greybox.querySelectorAll('a[href*="attachments/"]');
+    for (const link of greyboxLinks) {
+      const href = link.getAttribute('href');
+      const filename = link.textContent.trim() || path.basename(href);
+      if (href && filename) {
+        // Try to parse a unique ID from href, fallback to filename
+        const parts = href.split('/');
+        let id = filename;
+        const attachmentsIndex = parts.indexOf('attachments');
+         if (attachmentsIndex !== -1 && attachmentsIndex + 2 < parts.length && /^\d+$/.test(parts[attachmentsIndex+1]) && /^\d+$/.test(parts[attachmentsIndex+2])) {
+            id = parts[attachmentsIndex+2]; // Use the numeric ID if available
+        }
+
+        if (!attachments.has(id)) {
+          attachments.set(id, {
+            id, filename,
+            containerId: (attachmentsIndex !== -1 && attachmentsIndex + 1 < parts.length && /^\d+$/.test(parts[attachmentsIndex+1])) ? parts[attachmentsIndex+1] : null,
+            href: href.startsWith('http') ? href : path.normalize(href).replace(/\\/g, '/')
+          });
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Extracts attachment information from various common patterns in a JSDOM document.
+ * This function aggregates results from several helper functions, each targeting specific ways
+ * attachments are embedded or linked in HTML (e.g., Confluence-specific attributes, image paths, "greybox" lists).
+ * Paths are normalized, and efforts are made to assign unique IDs to attachments.
+ * @param {Document} document - The JSDOM `Document` object to parse for attachments.
+ * @returns {Map<string, {id: string, filename: string, containerId: (string|null), href: string}>}
+ *          A map where keys are unique attachment identifiers (often derived IDs or filenames) and
+ *          values are objects containing `id`, `filename`, `containerId` (if available), and `href`.
+ */
+function extractAttachmentInfo(document) {
+  const attachments = new Map();
+  try {
+    extractLinkedResourceAttachments(document, attachments);
+    extractImageSrcAttachments(document, attachments);
+    extractGreyboxAttachments(document, attachments);
+
+    // Add other common patterns if needed, e.g. Confluence specific span.confluence-embedded-file
+    const embeddedFiles = document.querySelectorAll('span.confluence-embedded-file a, div.confluence-embedded-file a');
+    for (const link of embeddedFiles) {
+        const href = link.getAttribute('href');
+        const filename = link.getAttribute('data-filename') || link.textContent.trim() || path.basename(href);
+        if (href && filename) {
+            const id = path.basename(href, path.extname(href)) + '-' + filename; // Create a more unique ID
+            if (!attachments.has(id)) {
+                 attachments.set(id, {
+                    id, filename, containerId: null, // containerId might not be available here
+                    href: href.startsWith('http') ? href : path.normalize(href).replace(/\\/g, '/')
+                });
+            }
+        }
+    }
+
+  } catch (err) {
+    console.error('Error extracting attachment info:', err);
+    // Return what has been collected so far, or an empty map
+  }
+  return attachments;
+}
+
+// --- Other Extraction Functions ---
+
+/**
+ * Finds all elements in the document that are likely "panel" components
+ * (e.g., info boxes, note panels, warning panels).
+ * It queries for a list of common CSS selectors used for such panels.
+ * @param {Document} document - The JSDOM `Document` object.
+ * @returns {Element[]} An array of JSDOM `Element` objects identified as panels.
  */
 function findPanels(document) {
-  // Get all panels - Confluence uses various selectors for panels
-  const panelSelectors = [
-    '.panel',
-    '.confluence-information-macro',
-    '.aui-message',
-    '.admonition',
-    '.expand-container'
-  ];
-  
+  const panelSelectors = ['.panel', '.confluence-information-macro', '.aui-message', '.admonition', '.expand-container'];
   const panels = [];
-  
   for (const selector of panelSelectors) {
-    const elements = document.querySelectorAll(selector);
-    panels.push(...Array.from(elements));
+    panels.push(...Array.from(document.querySelectorAll(selector)));
   }
-  
   return panels;
 }
 
 /**
- * Find tables in the document
- * @param {Document} document JSDOM document
- * @returns {Element[]} Array of table elements
+ * Finds all `<table>` elements in the JSDOM document.
+ * @param {Document} document - The JSDOM `Document` object.
+ * @returns {Element[]} An array of all `<table>` elements found in the document.
  */
 function findTables(document) {
   return Array.from(document.querySelectorAll('table'));
 }
 
 /**
- * Find the history table specifically
- * @param {Document} document JSDOM document
- * @returns {Element|null} History table element
+ * Attempts to find a page history table within the JSDOM document.
+ * It uses a combination of specific IDs/class selectors and heuristics, such as
+ * looking for tables near headings containing "History" or "Version", or tables
+ * with characteristic column headers (e.g., "Version", "Changed By").
+ * @param {Document} document - The JSDOM `Document` object.
+ * @returns {Element|null} The identified history table `Element`, or `null` if no suitable table is found.
  */
 function findHistoryTable(document) {
-  // Look for various types of history tables
-  const historySelectors = [
-    '#page-history-container',
-    '.tableview',
-    'table.pageHistory',
-    'table#page-history'
-  ];
-  
-  // Try direct selectors first
+  const historySelectors = ['#page-history-container', '.tableview', 'table.pageHistory', 'table#page-history'];
   for (const selector of historySelectors) {
     const element = document.querySelector(selector);
     if (element) return element;
   }
-  
-  // Try to find by nearby text
-  const historyHeadings = document.querySelectorAll('h1, h2, h3, h4, h5, h6');
-  for (const heading of historyHeadings) {
-    if (heading.textContent.toLowerCase().includes('history') || 
-        heading.textContent.toLowerCase().includes('version')) {
-      // Look for a table following this heading
+  // Heuristic: find tables near headings like "History" or "Version"
+  const headings = document.querySelectorAll('h1, h2, h3, h4, h5, h6');
+  for (const heading of headings) {
+    const headingText = heading.textContent.toLowerCase();
+    if (headingText.includes('history') || headingText.includes('version')) {
       let nextElement = heading.nextElementSibling;
       while (nextElement) {
-        if (nextElement.tagName === 'TABLE') {
-          return nextElement;
-        }
-        // If we encounter another heading, stop searching
-        if (/^H[1-6]$/.test(nextElement.tagName)) break;
+        if (nextElement.tagName === 'TABLE') return nextElement;
+        if (/^H[1-6]$/.test(nextElement.tagName)) break; // Stop if another heading is encountered
         nextElement = nextElement.nextElementSibling;
       }
     }
   }
-  
-  // Look for tables with "Version" and "Changed By" columns
+  // Heuristic: find tables with specific column headers
   const tables = document.querySelectorAll('table');
   for (const table of tables) {
-    const headers = Array.from(table.querySelectorAll('th, thead td'))
-      .map(cell => cell.textContent.trim().toLowerCase());
-    
-    // Check if this table has version history headers
-    if ((headers.includes('version') || headers.includes('v.')) && 
-        (headers.includes('changed by') || headers.includes('author') || 
-         headers.includes('published') || headers.includes('modified'))) {
+    const headers = Array.from(table.querySelectorAll('th, thead td')).map(cell => cell.textContent.trim().toLowerCase());
+    if ((headers.includes('version') || headers.includes('v.')) && (headers.includes('changed by') || headers.includes('author') || headers.includes('published') || headers.includes('modified'))) {
       return table;
     }
   }
-  
-  // Look for a table inside an expander with "history" in the title
+  // Heuristic: find tables inside "expand" elements with "history" in title
   const expanders = document.querySelectorAll('.expand-container');
   for (const expander of expanders) {
     const controlText = expander.querySelector('.expand-control-text');
     if (controlText && controlText.textContent.toLowerCase().includes('history')) {
-      const table = expander.querySelector('table');
-      if (table) return table;
+      const tableInExpander = expander.querySelector('table');
+      if (tableInExpander) return tableInExpander;
     }
   }
-  
   return null;
 }
 
 /**
- * Extract attachment information from parsed HTML
- * @param {Document} document JSDOM document
- * @returns {Map<string, object>} Map of attachment ID to attachment info
- */
-function extractAttachmentInfo(document) {
-  const attachments = new Map();
-  
-  try {
-    // Find all attachment links
-    const attachmentLinks = document.querySelectorAll('a[data-linked-resource-type="attachment"]');
-    
-    for (const link of attachmentLinks) {
-      const id = link.getAttribute('data-linked-resource-id');
-      const filename = link.textContent.trim();
-      const containerId = link.getAttribute('data-linked-resource-container-id');
-      const href = link.getAttribute('href');
-      
-      if (id && filename) {
-        attachments.set(id, {
-          id,
-          filename,
-          containerId,
-          href: href || `attachments/${containerId}/${id}${path.extname(filename)}`
-        });
-      }
-    }
-    
-    // Also collect image attachments
-    const imageLinks = document.querySelectorAll('img[data-linked-resource-type="attachment"]');
-    
-    for (const img of imageLinks) {
-      const id = img.getAttribute('data-linked-resource-id');
-      const src = img.getAttribute('src');
-      
-      if (id && src && !attachments.has(id)) {
-        const filename = path.basename(src);
-        const containerId = img.getAttribute('data-linked-resource-container-id');
-        
-        attachments.set(id, {
-          id,
-          filename,
-          containerId,
-          href: `attachments/${containerId}/${id}${path.extname(filename)}`
-        });
-      }
-    }
-    
-    // Also look for images in attachments folder
-    const regularImages = document.querySelectorAll('img[src^="attachments/"]');
-    for (const img of regularImages) {
-      const src = img.getAttribute('src');
-      if (src) {
-        const matches = src.match(/attachments\/(\d+)\/(\d+)/);
-        if (matches && matches[1] && matches[2]) {
-          const containerId = matches[1];
-          const id = matches[2];
-          const filename = path.basename(src);
-          
-          if (!attachments.has(id)) {
-            attachments.set(id, {
-              id,
-              filename,
-              containerId,
-              href: src
-            });
-          }
-        }
-      }
-    }
-    
-    // Get attachments from the greybox section if present
-    const greybox = document.querySelector('.greybox');
-    if (greybox) {
-      const attachmentLinks = greybox.querySelectorAll('a');
-      for (const link of attachmentLinks) {
-        const href = link.getAttribute('href');
-        const filename = link.textContent.trim();
-        
-        if (href && filename) {
-          // Try to parse the ID from the href
-          const matches = href.match(/\/(\d+)\/(\d+)/);
-          if (matches && matches[1] && matches[2]) {
-            const containerId = matches[1];
-            const id = matches[2];
-            
-            if (!attachments.has(id)) {
-              attachments.set(id, {
-                id,
-                filename,
-                containerId,
-                href
-              });
-            }
-          }
-        }
-      }
-    }
-    
-    return attachments;
-  } catch (err) {
-    console.error('Error extracting attachment info:', err);
-    return new Map();
-  }
-}
-
-/**
- * Find all content sections in the document
- * @param {Document} document JSDOM document
- * @returns {Map<string, Element>} Map of section IDs to elements
+ * Extracts content sections from the document, assuming sections are demarcated by heading elements (H1-H6).
+ * Each section includes the header element itself and all subsequent sibling content until the next
+ * header of the same or higher level.
+ * Note: This function's utility might be limited if main content is processed more holistically.
+ * @param {Document} document - The JSDOM `Document` object.
+ * @returns {Map<string, {header: Element, content: Element, level: number}>}
+ *          A map where keys are section IDs (derived from header ID or slugified text) and values are
+ *          objects containing the `header` element, a `div` element (`content`) with cloned content
+ *          of the section, and the heading `level`.
  */
 function findContentSections(document) {
   const sections = new Map();
-  
-  // Look for section headers
   const headers = document.querySelectorAll('h1, h2, h3, h4, h5, h6');
-  
   for (const header of headers) {
     const id = header.id || header.textContent.trim().toLowerCase().replace(/\s+/g, '-');
-    
-    // Collect all content until the next header of the same or higher level
     const level = parseInt(header.tagName.substring(1), 10);
-    let content = document.createElement('div');
+    const contentElement = document.createElement('div'); // Container for content under this header
     let currentNode = header.nextSibling;
-    
     while (currentNode) {
-      // Stop at the next header of the same or higher level
-      if (currentNode.nodeType === 1 && 
-          /^H[1-6]$/.test(currentNode.tagName) && 
-          parseInt(currentNode.tagName.substring(1), 10) <= level) {
-        break;
+      if (currentNode.nodeType === 1 && /^H[1-6]$/.test(currentNode.tagName) && parseInt(currentNode.tagName.substring(1), 10) <= level) {
+        break; // Stop at next header of same or higher level
       }
-      
-      // Clone and add the node to our content
-      content.appendChild(currentNode.cloneNode(true));
+      contentElement.appendChild(currentNode.cloneNode(true));
       currentNode = currentNode.nextSibling;
     }
-    
-    // Add the section to our map
-    sections.set(id, {
-      header,
-      content,
-      level
-    });
+    if (id && !sections.has(id)) { // Avoid duplicate IDs, first one wins
+        sections.set(id, { header, content: contentElement, level });
+    }
   }
-  
   return sections;
 }
 
 /**
- * Find layouts in the document
- * @param {Document} document JSDOM document
- * @returns {Element[]} Array of layout elements
+ * Finds elements in the document that are likely used as layout containers
+ * (e.g., for columns, sections).
+ * It queries for a list of common CSS selectors used for such layout elements.
+ * @param {Document} document - The JSDOM `Document` object.
+ * @returns {Element[]} An array of JSDOM `Element` objects identified as layout containers.
  */
 function findLayouts(document) {
-  // Confluence uses several layout class names
-  const layoutSelectors = [
-    '.contentLayout',
-    '.columnLayout',
-    '.layout',
-    '.section'
-  ];
-  
+  const layoutSelectors = ['.contentLayout', '.columnLayout', '.layout', '.section', '.cell', '.innerCell']; // Added cell/innerCell as they can be layout containers
   const layouts = [];
-  
   for (const selector of layoutSelectors) {
-    const elements = document.querySelectorAll(selector);
-    layouts.push(...Array.from(elements));
+    layouts.push(...Array.from(document.querySelectorAll(selector)));
   }
-  
   return layouts;
 }
 
 /**
- * Find all cells within layouts
- * @param {Document} document JSDOM document
- * @returns {Element[]} Array of cell elements
+ * Finds elements that typically function as cells within layouts or tables.
+ * This includes `<td>`, `<th>` elements, as well as `<div>` elements with common
+ * cell-like class names (e.g., `.cell`, `.layout-column`).
+ * @param {Document} document - The JSDOM `Document` object.
+ * @returns {Element[]} An array of JSDOM `Element` objects identified as cells.
  */
 function findCells(document) {
-  return Array.from(document.querySelectorAll('.cell, .innerCell, .columnMacro'));
+  // Includes table cells and div-based layout cells
+  return Array.from(document.querySelectorAll('td, th, .cell, .innerCell, .layout-cell, .layout-column'));
 }
 
 /**
- * Determine if an element should be excluded from the output
- * @param {Element} element Element to check
- * @returns {boolean} True if element should be dropped
+ * Determines if a given HTML element should be dropped (i.e., excluded) from processing and conversion.
+ * Exclusion criteria include specific class names (e.g., 'footer', 'hidden', 'noprint'),
+ * specific IDs (e.g., 'breadcrumbs', 'sidebar'), and elements with `style.display === 'none'`.
+ * @param {Element} element - The HTML `Element` to check.
+ * @returns {boolean} True if the element meets any of the exclusion criteria, false otherwise.
+ *                    Also returns true if the input `element` is null or has no `tagName`.
  */
 function shouldBeDropped(element) {
-  if (!element || !element.tagName) return true;
+  if (!element || !element.tagName) return true; // Drop non-elements or nulls
+  const excludeClasses = ['breadcrumb-section', 'footer', 'aui-nav', 'pageSectionHeader', 'hidden', 'navigation-section', 'noprint'];
+  const excludeIds = ['breadcrumbs', 'footer', 'navigation', 'sidebar', 'page-sidebar', 'header-aui'];
   
-  // Skip navigation, breadcrumbs, etc.
-  const excludeClasses = [
-    'breadcrumb-section',
-    'footer',
-    'aui-nav',
-    'pageSection',
-    'pageSectionHeader',
-    'hidden'
-  ];
-  
-  // Skip specific IDs
-  const excludeIds = [
-    'breadcrumbs',
-    'footer',
-    'navigation',
-    'sidebar',
-    'page-sidebar'
-  ];
-  
-  // Check class names
   if (element.className && typeof element.className === 'string') {
     const classNames = element.className.split(' ');
-    for (const cls of classNames) {
-      if (excludeClasses.includes(cls)) {
-        return true;
-      }
-    }
+    if (classNames.some(cls => excludeClasses.includes(cls))) return true;
   }
-  
-  // Check IDs
-  if (element.id && excludeIds.includes(element.id)) {
-    return true;
-  }
+  if (element.id && excludeIds.includes(element.id)) return true;
+  // Example: Drop elements that are visually hidden by Confluence styles, if not covered by display:none in content-processor
+  if (element.style && element.style.display === 'none') return true; 
   
   return false;
 }
 
 /**
- * Extract all images from the document
- * @param {Document} document JSDOM document
- * @returns {Element[]} Array of image elements
+ * Extracts all `<img>` elements from the JSDOM document.
+ * @param {Document} document - The JSDOM `Document` object.
+ * @returns {Element[]} An array of all `<img>` elements found in the document.
  */
 function extractImages(document) {
   return Array.from(document.querySelectorAll('img'));
 }
 
 /**
- * Extract and preserve breadcrumbs from Confluence HTML
- * @param {Document} document The JSDOM document
- * @returns {Array} Array of breadcrumb items with text and href
+ * Extracts breadcrumb navigation data from the JSDOM document.
+ * It searches for list items (`<li>`) within common breadcrumb container selectors
+ * (e.g., `#breadcrumbs`, `.breadcrumb-section`, `.aui-breadcrumb`).
+ * For each item, it extracts the link text and a normalized `href`.
+ * @param {Document} document - The JSDOM `Document` object.
+ * @returns {Array<{text: string, href: string}>} An array of breadcrumb objects,
+ *          each containing the `text` and `href` of a breadcrumb link.
+ *          Returns an empty array if no breadcrumbs are found.
  */
 function extractBreadcrumbs(document) {
   const breadcrumbs = [];
-  const breadcrumbItems = document.querySelectorAll('#breadcrumbs li, .breadcrumb-section ol li');
+  const breadcrumbSelectors = ['#breadcrumbs li', '.breadcrumb-section ol li', '.aui-breadcrumb li']; // Added AUI breadcrumbs
   
-  if (breadcrumbItems && breadcrumbItems.length > 0) {
-    for (const item of breadcrumbItems) {
-      const link = item.querySelector('a');
-      if (link) {
-        let href = link.getAttribute('href') || '#';
-        
-        // Convert to relative path if it's not already
-        if (href.startsWith('/')) {
-          href = `.${href}`;
-        } else if (href.includes('://')) {
-          // Keep external URLs as is
-        } else if (!href.startsWith('./') && !href.startsWith('../') && href !== '#') {
-          href = `./${href}`;
-        }
-        
-        breadcrumbs.push({
-          text: link.textContent.trim(),
-          href: href
-        });
-      } else if (item.textContent.trim()) {
-        // For items without links (current page often doesn't have a link)
-        breadcrumbs.push({
-          text: item.textContent.trim(),
-          href: '#'
-        });
+  for (const selector of breadcrumbSelectors) {
+      const items = document.querySelectorAll(selector);
+      if (items.length > 0) {
+          for (const item of items) {
+            const link = item.querySelector('a');
+            const text = link ? link.textContent.trim() : item.textContent.trim();
+            let href = link ? link.getAttribute('href') || '#' : '#';
+
+            if (href !== '#') { // Normalize if not a placeholder link
+                if (href.startsWith('/')) href = `.${href}`; // Relative from root
+                else if (!href.startsWith('http') && !href.startsWith('./') && !href.startsWith('../')) href = `./${href}`; // Assume relative to current dir
+            }
+            if (text) breadcrumbs.push({ text, href });
+          }
+          if (breadcrumbs.length > 0) break; // Use first found set of breadcrumbs
       }
-    }
   }
-  
   return breadcrumbs;
 }
 
 module.exports = {
-  extractBreadcrumbs,
   parseFile,
   extractTitle,
   extractLastModified,
   findMainContent,
+  extractAttachmentInfo,
+  // Exporting new helper functions for attachments if they might be useful externally or for testing
+  extractLinkedResourceAttachments,
+  extractImageSrcAttachments,
+  extractGreyboxAttachments,
+  // Other utility functions
+  extractBreadcrumbs,
   findPanels,
   findTables,
   findHistoryTable,
-  extractAttachmentInfo,
   findContentSections,
   findLayouts,
   findCells,
