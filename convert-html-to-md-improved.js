@@ -52,6 +52,7 @@ let mdDir = typeof config.mdDir === 'string' && config.mdDir.trim()
 let titlePrefixToRemove = typeof config.titlePrefix === 'string' && config.titlePrefix.length
   ? config.titlePrefix
   : null;
+let expandToDetails = config.expandToDetails === true;
 
 let limit = null;
 let fixNH = false;
@@ -109,6 +110,16 @@ for (let i = 0; i < args.length; i += 1) {
     if (value) {
       titlePrefixToRemove = value;
     }
+    continue;
+  }
+
+  if (arg === '--expand-to-details') {
+    expandToDetails = true;
+    continue;
+  }
+
+  if (arg === '--no-expand-to-details') {
+    expandToDetails = false;
     continue;
   }
 
@@ -182,7 +193,8 @@ convertHtmlToMarkdown({
   fixNH,
   includeNavigation,
   onlyFiles: onlyFilesFilter,
-  titlePrefixToRemove
+  titlePrefixToRemove,
+  convertExpanders: expandToDetails
 }, {
   htmlDir,
   mdDir
