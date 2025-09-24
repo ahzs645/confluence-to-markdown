@@ -1,0 +1,14 @@
+{
+  "name": "cih-html-to-md-tools",
+  "version": "1.0.0",
+  "description": "Confluence HTML export to Obsidian-ready Markdown converter.",
+  "type": "commonjs",
+  "scripts": {
+    "convert": "node convert-html-to-md-improved.js"
+  },
+  "dependencies": {
+    "@guyplusplus/turndown-plugin-gfm": "^1.0.7",
+    "fs-extra": "^11.3.2",
+    "turndown": "^7.2.1"
+  }
+}
